@@ -92,6 +92,24 @@ chat_capabilities <- function(client, ...) {
     UseMethod("chat_capabilities")
 }
 
+#' Close a chat client's connection
+#'
+#' The default method is a no-op: HTTP-poll transports have nothing to
+#' close. Persistent-socket transports (IRC) override it.
+#'
+#' @param client A \code{chat_client}.
+#' @param ... Adapter-specific options.
+#' @return TRUE, invisibly.
+#' @export
+chat_disconnect <- function(client, ...) {
+    UseMethod("chat_disconnect")
+}
+
+#' @export
+chat_disconnect.default <- function(client, ...) {
+    invisible(TRUE)
+}
+
 #' Construct a normalized chat message
 #'
 #' The record every adapter's \code{\link{chat_poll}} returns. \code{raw}
