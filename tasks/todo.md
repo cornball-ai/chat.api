@@ -6,9 +6,10 @@
       through chat_poll against cornball.ai, read-only)
 - [x] IRC adapter over base sockets (roundtrip-tested against an
       in-process serverSocket fake)
-- [x] Slack adapter skeleton (Suggests slackr) — UNVERIFIED: awaiting
-      slackr install (Troy) + workspace token; verify slackr_msg /
-      slackr_history signatures then
+- [x] Slack adapter verified against installed slackr signatures
+      (formals pinned in tinytest; per-channel history polling with
+      per-channel cursors). Live send/poll still needs a workspace
+      token + test channel.
 - [ ] Rewire corteza loop to chat_poll/chat_send; land corteza PR #155
       as the identity option
 - [ ] Telegram adapter (getUpdates; shape-identical to Matrix sync)

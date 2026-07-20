@@ -11,7 +11,7 @@ adapters that wake up when their platform client is installed:
 | Loopback | `chat_loopback()` | (in-memory) | reference implementation |
 | Matrix | `chat_matrix()` | mx.client (Suggests) | working |
 | IRC | `chat_irc()` | base R sockets | working |
-| Slack | `chat_slack()` | slackr (Suggests) | experimental, unverified |
+| Slack | `chat_slack()` | slackr (Suggests) | signature-verified; live roundtrip pending a workspace token |
 
 ```r
 cl <- chat.api::chat_matrix(app = "mybot")
