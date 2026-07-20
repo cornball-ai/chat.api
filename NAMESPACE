@@ -1,0 +1,16 @@
+# tinyrox says don't edit this manually, but it can't stop you!
+
+export(chat_capabilities)
+export(chat_loopback)
+export(chat_message)
+export(chat_poll)
+export(chat_resolve)
+export(chat_send)
+export(chat_typing)
+
+S3method(chat_capabilities,chat_loopback)
+S3method(chat_poll,chat_loopback)
+S3method(chat_resolve,chat_loopback)
+S3method(chat_send,chat_loopback)
+S3method(chat_typing,default)
+S3method(print,chat_message)
