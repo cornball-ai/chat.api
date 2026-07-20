@@ -1,0 +1,24 @@
+Package: chat.api
+Type: Package
+Title: Transport-Agnostic Chat Contract for R Agents
+Version: 0.0.1
+Date: 2026-07-20
+Authors@R: c(
+    person("Troy", "Hernandez", role = c("aut", "cre"),
+           email = "troy@cornball.ai",
+           comment = c(ORCID = "0009-0005-4248-604X")),
+    person("cornball.ai", role = "cph"))
+Description: A transport-agnostic contract for chat-room connectivity:
+    connect, poll, and send against one interface, with adapters for
+    'Matrix', 'Slack', Internet Relay Chat (IRC), and other platforms
+    supplied by optional packages. The contract is the union of the
+    parameters found across the R chat-client ecosystem, with per-adapter
+    capability flags for threads, markup dialects, encryption, and
+    per-message identity. Zero dependencies.
+License: Apache License (>= 2)
+Depends: R (>= 4.0)
+URL: https://github.com/cornball-ai/chat.api
+BugReports: https://github.com/cornball-ai/chat.api/issues
+Suggests:
+    tinytest
+Encoding: UTF-8
