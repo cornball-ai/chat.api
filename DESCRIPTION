@@ -20,5 +20,9 @@ Depends: R (>= 4.0)
 URL: https://github.com/cornball-ai/chat.api
 BugReports: https://github.com/cornball-ai/chat.api/issues
 Suggests:
+    mx.api,
+    mx.client,
+    mx.crypto,
+    slackr,
     tinytest
 Encoding: UTF-8
