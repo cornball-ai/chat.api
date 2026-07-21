@@ -15,3 +15,15 @@
 - [ ] Telegram adapter (getUpdates; shape-identical to Matrix sync)
 - [ ] CI (r-ci); decide public flip once the corteza rewire proves the
       contract
+
+## corteza rewire map (recon 2026-07-20)
+
+Message plane (round 1, contract-ready): sync+extract (matrix.R:995,188),
+text sends (matrix_send:179, matrix_send_maybe_encrypted plaintext branch
+in matrix_crypto.R:148), typing (matrix.R:1187).
+Control plane (later rounds, verb-by-verb): invites (612/945), reaction
+approvals (mx_react 771, verdicts 848), room metadata (name/topic/members),
+backfill (1372), relogin wrapper (995), E2EE (matrix_crypto.R, stays in
+corteza round 1; chat_send handles plaintext only there).
+Seams chat.api needs: chat_matrix(mx=) accepting a ready mx.client object;
+chat_poll returning the raw sync response for control-plane consumers.
