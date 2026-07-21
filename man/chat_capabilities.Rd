@@ -11,8 +11,10 @@ chat_capabilities(client, ...)
 \item{...}{Adapter-specific options.}
 }
 \value{
-A list with at least: \code{threads}, \code{edits},
-  \code{reactions}, \code{files}, \code{typing}, \code{e2ee},
+A list with at least: \code{threads} (can post into
+  threads), \code{thread_replies} (thread replies come back out of
+  \code{\link{chat_poll}}), \code{edits}, \code{reactions},
+  \code{files}, \code{typing}, \code{e2ee},
   \code{identity_override} (logicals), \code{markup_dialects}
   (character), \code{max_message_bytes} (integer or NA).
 }

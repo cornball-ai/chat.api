@@ -102,8 +102,9 @@ chat_resolve.chat_matrix <- function(client, name, ...) {
 
 #' @export
 chat_capabilities.chat_matrix <- function(client, ...) {
-    list(threads = FALSE, edits = FALSE, reactions = TRUE, files = TRUE,
-         typing = TRUE, e2ee = requireNamespace("mx.crypto", quietly = TRUE),
+    list(threads = FALSE, thread_replies = TRUE, edits = FALSE,
+         reactions = TRUE, files = TRUE, typing = TRUE,
+         e2ee = requireNamespace("mx.crypto", quietly = TRUE),
          identity_override = FALSE, markup_dialects = c("plain", "markdown"),
          max_message_bytes = NA_integer_)
 }
