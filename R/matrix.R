@@ -13,17 +13,25 @@
 #'   \code{mx.client::mx_client_load()}.
 #' @param path Explicit config path, or NULL for the app default.
 #' @param save_cursor Logical. Persist the sync token after each poll.
+#'   Consumers that manage their own config (corteza) pass FALSE and
+#'   persist the returned cursor themselves.
+#' @param mx A ready mx.client client config to wrap, for consumers
+#'   that already load and manage one; NULL (default) loads via
+#'   \code{app}/\code{path}.
 #' @return A \code{chat_client} of class \code{chat_matrix}.
 #' @export
-chat_matrix <- function(app = "chat.api", path = NULL, save_cursor = TRUE) {
+chat_matrix <- function(app = "chat.api", path = NULL, save_cursor = TRUE,
+                        mx = NULL) {
     if (!requireNamespace("mx.client", quietly = TRUE)) {
         stop("chat_matrix() requires the 'mx.client' package. ",
              "Install it first.", call. = FALSE)
     }
-    mx <- if (is.null(path)) {
-        mx.client::mx_client_load(app = app)
-    } else {
-        mx.client::mx_client_load(app = app, path = path)
+    if (is.null(mx)) {
+        mx <- if (is.null(path)) {
+            mx.client::mx_client_load(app = app)
+        } else {
+            mx.client::mx_client_load(app = app, path = path)
+        }
     }
     env <- new.env(parent = emptyenv())
     env$mx <- mx
@@ -57,7 +65,11 @@ chat_poll.chat_matrix <- function(client, since = NULL, timeout = NULL, ...) {
                      markup = "plain", kind = r$msgtype %||% "message",
                      raw = r)
     })
-    list(messages = messages, cursor = res$client$sync_token)
+    # raw carries the full sync response for Matrix-specific consumers
+    # (invites, reactions, E2EE decryption) that the generic contract
+    # does not model yet
+    list(messages = messages, cursor = res$client$sync_token,
+         raw = res$sync)
 }
 
 #' @export
@@ -88,7 +100,9 @@ chat_send.chat_matrix <- function(client, channel, text,
 #' @export
 chat_typing.chat_matrix <- function(client, channel, on = TRUE, ...) {
     ok <- tryCatch({
-        mx.api::mx_typing(client$env$mx, channel, typing = isTRUE(on),
+        # mx.api wants a session, not the client config
+        sess <- mx.client::mx_client_session(client$env$mx)
+        mx.api::mx_typing(sess, channel, typing = isTRUE(on),
                           timeout = 30000L)
         TRUE
     }, error = function(e) FALSE)

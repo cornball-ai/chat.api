@@ -3,7 +3,7 @@
 \alias{chat_matrix}
 \title{Create a Matrix chat client}
 \usage{
-chat_matrix(app = "chat.api", path = NULL, save_cursor = TRUE)
+chat_matrix(app = "chat.api", path = NULL, save_cursor = TRUE, mx = NULL)
 }
 \arguments{
 \item{app}{Application namespace passed to
@@ -11,7 +11,13 @@ chat_matrix(app = "chat.api", path = NULL, save_cursor = TRUE)
 
 \item{path}{Explicit config path, or NULL for the app default.}
 
-\item{save_cursor}{Logical. Persist the sync token after each poll.}
+\item{save_cursor}{Logical. Persist the sync token after each poll.
+Consumers that manage their own config (corteza) pass FALSE and
+persist the returned cursor themselves.}
+
+\item{mx}{A ready mx.client client config to wrap, for consumers
+that already load and manage one; NULL (default) loads via
+\code{app}/\code{path}.}
 }
 \value{
 A \code{chat_client} of class \code{chat_matrix}.
