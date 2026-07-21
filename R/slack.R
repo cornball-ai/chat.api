@@ -1,28 +1,35 @@
 #' @title Slack adapter
 #' @description chat.api methods for Slack, delegating to the suggested
 #'   slackr package. Receive is per-channel Web API polling
-#'   (conversations.history via slackr_history), so channels are
-#'   configured at connect time, IRC-style. Verified against slackr's
-#'   installed signatures; the tinytest pins them.
+#'   (conversations.history via slackr_history): the first poll per
+#'   channel seeds the cursor at the newest message (no history
+#'   replay), later polls paginate the full window since the cursor so
+#'   bursts larger than one page are never dropped.
+#'
+#'   Known platform limits, reflected in \code{chat_capabilities()}:
+#'   thread REPLIES are not returned by conversations.history, so polls
+#'   see channel-level messages and thread parents only
+#'   (\code{thread_replies = FALSE}); file upload is disabled because
+#'   slackr (<= 3.3.1) still calls the retired files.upload endpoint;
+#'   per-message identity requires the chat:write.customize scope.
 
 #' Create a Slack chat client
 #'
 #' Requires the suggested \pkg{slackr} package and a bot token.
-#' \code{\link{chat_poll}} polls \code{slackr::slackr_history()} for
-#' each configured channel; the cursor is a named list of per-channel
-#' message timestamps.
+#' Channel names are normalized to bare names (no \code{#}), matching
+#' what slackr's channel translation accepts.
 #'
 #' @param channels Character vector of channels to poll.
 #' @param token Bot token; defaults to the \code{SLACK_TOKEN}
 #'   environment variable.
-#' @param username Default bot display name for sends. Slack allows
-#'   per-message identity: the \code{identity} argument of
-#'   \code{\link{chat_send}} overrides name and icon per post.
+#' @param username Default display-name override for sends, or NULL
+#'   (default) to post as the bot's own identity. Any override,
+#'   including via \code{chat_send(identity =)}, needs the
+#'   chat:write.customize scope on the token.
 #' @return A \code{chat_client} of class \code{chat_slack}.
 #' @export
 chat_slack <- function(channels = character(),
-                       token = Sys.getenv("SLACK_TOKEN"),
-                       username = "chat.api") {
+                       token = Sys.getenv("SLACK_TOKEN"), username = NULL) {
     if (!requireNamespace("slackr", quietly = TRUE)) {
         stop("chat_slack() requires the 'slackr' package. ",
              "Install it first.", call. = FALSE)
@@ -32,8 +39,8 @@ chat_slack <- function(channels = character(),
     }
     env <- new.env(parent = emptyenv())
     env$cursor <- list()
-    structure(list(env = env, channels = channels, token = token,
-                   username = username),
+    structure(list(env = env, channels = sub("^#", "", channels),
+                   token = token, username = username),
               class = c("chat_slack", "chat_client"))
 }
 
@@ -47,6 +54,25 @@ slack_col <- function(df, nm, i) {
     }
 }
 
+#' Render contract markup for Slack
+#'
+#' Slack processes all message text as mrkdwn, which is not Markdown.
+#' plain: escape the three characters Slack requires (&, <, >).
+#' markdown: translate the common divergences -- **bold** to *bold*,
+#' [text](url) to <url|text>. Italics (_x_), inline code, and fences
+#' already agree.
+#' @noRd
+slack_render <- function(text, markup) {
+    if (identical(markup, "markdown")) {
+        text <- gsub("\\*\\*([^*]+)\\*\\*", "*\\1*", text)
+        text <- gsub("\\[([^]]+)\\]\\(([^)]+)\\)", "<\\2|\\1>", text)
+        return(text)
+    }
+    text <- gsub("&", "&amp;", text, fixed = TRUE)
+    text <- gsub("<", "&lt;", text, fixed = TRUE)
+    gsub(">", "&gt;", text, fixed = TRUE)
+}
+
 #' @export
 chat_poll.chat_slack <- function(client, since = NULL, timeout = NULL, ...) {
     if (!is.null(since) && is.list(since)) {
@@ -54,24 +80,41 @@ chat_poll.chat_slack <- function(client, since = NULL, timeout = NULL, ...) {
     }
     messages <- list()
     for (ch in client$channels) {
-        args <- list(message_count = 100L, channel = ch,
-                     token = client$token, paginate = FALSE)
         last <- client$env$cursor[[ch]]
-        if (!is.null(last)) {
-            args$posted_from_time <- last
-            args$inclusive <- FALSE
+
+        if (is.null(last)) {
+            # First contact: seed the cursor at the newest message so a
+            # restart never replays channel history as new traffic
+            seed <- tryCatch(
+                             slackr::slackr_history(message_count = 1L, channel = ch,
+                    token = client$token, paginate = FALSE),
+                             error = function(e) NULL
+            )
+            if (!is.null(seed) && NROW(seed)) {
+                client$env$cursor[[ch]] <- max(as.character(seed$ts))
+            } else {
+                client$env$cursor[[ch]] <- "0"
+            }
+            next
         }
-        hist <- tryCatch(do.call(slackr::slackr_history, args),
-                         error = function(e) NULL)
+
+        # paginate = TRUE walks every page in the window since the
+        # cursor: a burst larger than one page (or the 15-object limit
+        # newer Slack app classes get) is never silently dropped
+        hist <- tryCatch(
+                         slackr::slackr_history(message_count = 100L,
+                channel = ch,
+                token = client$token,
+                posted_from_time = last,
+                inclusive = FALSE,
+                paginate = TRUE),
+                         error = function(e) NULL
+        )
         if (is.null(hist) || !NROW(hist)) {
             next
         }
         ts_chr <- as.character(hist$ts)
-        keep <- if (is.null(last)) {
-            seq_along(ts_chr)
-        } else {
-            which(as.numeric(ts_chr) > as.numeric(last))
-        }
+        keep <- which(as.numeric(ts_chr) > as.numeric(last))
         keep <- keep[order(as.numeric(ts_chr[keep]))]
         for (i in keep) {
             thread <- slack_col(hist, "thread_ts", i)
@@ -97,12 +140,18 @@ chat_send.chat_slack <- function(client, channel, text,
                                  identity = NULL, files = NULL,
                                  kind = "message", notify = TRUE, ...) {
     markup <- match.arg(markup)
-    args <- list(txt = text, channel = channel, token = client$token,
-                 username = if (is.null(identity$name)) {
-            client$username
-        } else {
-            identity$name
-        })
+    args <- list(txt = slack_render(text, markup),
+                 channel = sub("^#", "", channel), token = client$token)
+    # Only override authorship when asked: username/icon need the
+    # chat:write.customize scope, plain sends should not
+    name_override <- if (is.null(identity$name)) {
+        client$username
+    } else {
+        identity$name
+    }
+    if (!is.null(name_override)) {
+        args$username <- name_override
+    }
     if (!is.null(identity$icon)) {
         args$icon_emoji <- identity$icon
     }
@@ -110,13 +159,25 @@ chat_send.chat_slack <- function(client, channel, text,
         args$thread_ts <- thread
     }
     res <- do.call(slackr::slackr_msg, args)
+    ts <- tryCatch(as.character(res$ts), error = function(e) NA_character_)
+
     if (!is.null(files)) {
+        # slackr (<= 3.3.1) uploads via the retired files.upload
+        # endpoint; try anyway, but never let a failed upload discard
+        # the ts of the already-posted text (duplicate-retry bait)
         for (f in files) {
-            slackr::slackr_upload(filename = f, channels = channel,
-                                  token = client$token)
+            tryCatch(
+                     slackr::slackr_upload(filename = f,
+                    channels = args$channel,
+                    token = client$token),
+                     error = function(e) {
+                warning("chat_send(): file upload failed (slackr uses the retired files.upload endpoint): ",
+                        conditionMessage(e), call. = FALSE)
+            }
+            )
         }
     }
-    invisible(tryCatch(as.character(res$ts), error = function(e) NA_character_))
+    invisible(ts)
 }
 
 #' @export
@@ -126,7 +187,8 @@ chat_resolve.chat_slack <- function(client, name, ...) {
 
 #' @export
 chat_capabilities.chat_slack <- function(client, ...) {
-    list(threads = TRUE, edits = FALSE, reactions = TRUE, files = TRUE,
-         typing = FALSE, e2ee = FALSE, identity_override = TRUE,
-         markup_dialects = c("plain", "markdown"), max_message_bytes = 40000L)
+    list(threads = TRUE, thread_replies = FALSE, edits = FALSE,
+         reactions = TRUE, files = FALSE, typing = FALSE, e2ee = FALSE,
+         identity_override = TRUE, markup_dialects = c("plain", "markdown"),
+         max_message_bytes = 40000L)
 }

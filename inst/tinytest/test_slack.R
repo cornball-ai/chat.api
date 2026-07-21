@@ -18,17 +18,20 @@ if (requireNamespace("slackr", quietly = TRUE)) {
     up_formals <- names(formals(slackr::slackr_upload))
     expect_true(all(c("filename", "channels", "token") %in% up_formals))
 
-    # Constructor: refuses to build without a token
+    # Constructor: refuses to build without a token, normalizes '#'
     expect_error(chat_slack(channels = "#lab", token = ""),
                  pattern = "token")
+    cl <- chat_slack(channels = c("#lab", "ops"), token = "xoxb-fake")
+    expect_identical(cl$channels, c("lab", "ops"))
+    expect_null(cl$username)
 
-    # With a token it builds and reports honest capabilities
-    cl <- chat_slack(channels = c("#lab"), token = "xoxb-fake")
-    expect_true(inherits(cl, "chat_client"))
+    # Capabilities are honest: threads postable but replies not
+    # received; files off while slackr uses the retired endpoint
     caps <- chat_capabilities(cl)
     expect_true(caps$threads)
+    expect_false(caps$thread_replies)
+    expect_false(caps$files)
     expect_true(caps$identity_override)
-    expect_false(caps$e2ee)
 
     # Channel resolution strips the hash (Slack API wants bare names)
     expect_identical(chat_resolve(cl, "#general"), "general")
@@ -39,3 +42,15 @@ if (requireNamespace("slackr", quietly = TRUE)) {
     expect_identical(length(got$messages), 0L)
     expect_identical(got$cursor, list())
 }
+
+# Markup rendering is pure and testable without slackr:
+# markdown translates the mrkdwn divergences
+expect_identical(chat.api:::slack_render("**bold** move", "markdown"),
+                 "*bold* move")
+expect_identical(chat.api:::slack_render("see [docs](https://x.y)", "markdown"),
+                 "see <https://x.y|docs>")
+# plain escapes Slack's three specials and nothing else
+expect_identical(chat.api:::slack_render("a < b & c > d", "plain"),
+                 "a &lt; b &amp; c &gt; d")
+expect_identical(chat.api:::slack_render("*not bold*", "plain"),
+                 "*not bold*")

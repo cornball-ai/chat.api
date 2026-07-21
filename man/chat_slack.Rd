@@ -4,7 +4,7 @@
 \title{Create a Slack chat client}
 \usage{
 chat_slack(channels = character(), token = Sys.getenv("SLACK_TOKEN"),
-           username = "chat.api")
+           username = NULL)
 }
 \arguments{
 \item{channels}{Character vector of channels to poll.}
@@ -12,16 +12,16 @@ chat_slack(channels = character(), token = Sys.getenv("SLACK_TOKEN"),
 \item{token}{Bot token; defaults to the \code{SLACK_TOKEN}
 environment variable.}
 
-\item{username}{Default bot display name for sends. Slack allows
-per-message identity: the \code{identity} argument of
-\code{\link{chat_send}} overrides name and icon per post.}
+\item{username}{Default display-name override for sends, or NULL
+(default) to post as the bot's own identity. Any override,
+including via \code{chat_send(identity =)}, needs the
+chat:write.customize scope on the token.}
 }
 \value{
 A \code{chat_client} of class \code{chat_slack}.
 }
 \description{
 Requires the suggested \pkg{slackr} package and a bot token.
-\code{\link{chat_poll}} polls \code{slackr::slackr_history()} for
-each configured channel; the cursor is a named list of per-channel
-message timestamps.
+Channel names are normalized to bare names (no \code{#}), matching
+what slackr's channel translation accepts.
 }
