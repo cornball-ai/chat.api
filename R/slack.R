@@ -100,9 +100,16 @@ chat_poll.chat_slack <- function(client, since = NULL, timeout = NULL, ...) {
         if (is.null(last)) {
             # First contact: seed the cursor at the newest message so a
             # restart never replays channel history as new traffic. A
-            # FAILED seed stays unseeded for retry -- seeding at "0"
-            # after an error would replay the whole channel once the
-            # API recovers.
+            # FAILED seed (R error) stays unseeded for retry. A
+            # zero-row seed is AMBIGUOUS: slackr collapses ok = FALSE
+            # API responses and truly empty channels into the same
+            # empty tibble, so the baseline must be safe for both --
+            # the wall clock at request start (Slack-style ts) is: an
+            # empty channel has nothing older to skip, and a failed
+            # call must never replay history from "0". Clock skew vs
+            # Slack's server stamps shifts the join point by at most
+            # the skew, once.
+            t0 <- sprintf("%.6f", as.numeric(Sys.time()))
             seed <- tryCatch(
                              client$history_fn(message_count = 1L, channel = ch,
                     token = client$token, paginate = FALSE),
@@ -114,7 +121,7 @@ chat_poll.chat_slack <- function(client, since = NULL, timeout = NULL, ...) {
             client$env$cursor[[ch]] <- if (NROW(seed)) {
                 max(as.character(seed$ts))
             } else {
-                "0"
+                t0
             }
             next
         }

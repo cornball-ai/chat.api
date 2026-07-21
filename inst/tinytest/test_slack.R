@@ -133,3 +133,33 @@ expect_warning(ts4 <- chat_send(cl, "lab", "with file",
                                 files = "/tmp/x.png"),
                pattern = "files.upload")
 expect_identical(ts4, "999.001")
+
+# Zero-row seed is ambiguous: slackr returns the same empty tibble for
+# ok = FALSE API errors and truly empty channels. The wall-clock
+# baseline must prevent history replay after recovery.
+hist2 <- new.env()
+hist2$n <- 0L
+t_now <- as.numeric(Sys.time())
+fake_history2 <- function(...) {
+    hist2$n <- hist2$n + 1L
+    if (hist2$n == 1L) {
+        return(data.frame())
+    }
+    data.frame(ts = sprintf("%.6f", c(t_now - 1000, t_now + 100)),
+               user = c("U1", "U2"),
+               text = c("ancient history", "fresh message"),
+               stringsAsFactors = FALSE)
+}
+cl2 <- chat_slack(channels = "lab", token = "xoxb-fake",
+                  .history = fake_history2, .post = fake_post)
+
+# Seed poll: empty frame -> baseline is the wall clock, not "0"
+s1 <- chat_poll(cl2)
+expect_identical(length(s1$messages), 0L)
+expect_true(as.numeric(s1$cursor$lab) >= t_now - 1)
+
+# Recovery poll: only the post-baseline message comes through;
+# pre-existing history is NOT replayed
+s2 <- chat_poll(cl2)
+expect_identical(length(s2$messages), 1L)
+expect_identical(s2$messages[[1L]]$body, "fresh message")
