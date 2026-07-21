@@ -45,3 +45,12 @@ expect_identical(chat_resolve(cl, "general"), "general")
 
 # Invalid markup errors via match.arg
 expect_error(chat_send(cl, "general", "x", markup = "html"))
+
+# chat_matrix() wraps a caller-supplied mx.client object without loading
+if (requireNamespace("mx.client", quietly = TRUE)) {
+    fake_mx <- list(user_id = "@bot:example.org", sync_token = "s123")
+    cm <- chat_matrix(mx = fake_mx, save_cursor = FALSE)
+    expect_true(inherits(cm, "chat_matrix"))
+    expect_identical(cm$env$mx$user_id, "@bot:example.org")
+    expect_false(cm$save_cursor)
+}
