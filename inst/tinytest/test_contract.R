@@ -35,7 +35,8 @@ expect_false(chat_typing(cl, "general", TRUE))
 
 # Capabilities carry the required schema
 caps <- chat_capabilities(cl)
-required <- c("threads", "edits", "reactions", "files", "typing", "e2ee",
+required <- c("threads", "thread_replies", "edits", "reactions",
+              "files", "typing", "e2ee",
               "identity_override", "markup_dialects", "max_message_bytes")
 expect_true(all(required %in% names(caps)))
 

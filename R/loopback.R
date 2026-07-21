@@ -57,8 +57,8 @@ chat_resolve.chat_loopback <- function(client, name, ...) {
 
 #' @export
 chat_capabilities.chat_loopback <- function(client, ...) {
-    list(threads = TRUE, edits = FALSE, reactions = FALSE, files = FALSE,
-         typing = FALSE, e2ee = FALSE, identity_override = TRUE,
-         markup_dialects = c("plain", "markdown"),
+    list(threads = TRUE, thread_replies = TRUE, edits = FALSE,
+         reactions = FALSE, files = FALSE, typing = FALSE, e2ee = FALSE,
+         identity_override = TRUE, markup_dialects = c("plain", "markdown"),
          max_message_bytes = NA_integer_)
 }

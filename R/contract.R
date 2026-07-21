@@ -83,8 +83,10 @@ chat_resolve <- function(client, name, ...) {
 #'
 #' @param client A \code{chat_client}.
 #' @param ... Adapter-specific options.
-#' @return A list with at least: \code{threads}, \code{edits},
-#'   \code{reactions}, \code{files}, \code{typing}, \code{e2ee},
+#' @return A list with at least: \code{threads} (can post into
+#'   threads), \code{thread_replies} (thread replies come back out of
+#'   \code{\link{chat_poll}}), \code{edits}, \code{reactions},
+#'   \code{files}, \code{typing}, \code{e2ee},
 #'   \code{identity_override} (logicals), \code{markup_dialects}
 #'   (character), \code{max_message_bytes} (integer or NA).
 #' @export
