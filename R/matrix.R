@@ -18,11 +18,25 @@
 #' @param mx A ready mx.client client config to wrap, for consumers
 #'   that already load and manage one; NULL (default) loads via
 #'   \code{app}/\code{path}.
+#' @param .sync Testing seam: replacement for
+#'   \code{mx.client::mx_sync_update}. Leave NULL in production.
+#' @param .extract Testing seam: replacement for
+#'   \code{mx.client::mx_extract_text_events}. Leave NULL in production.
+#' @param .send Testing seam: replacement for
+#'   \code{mx.client::mx_send_text}. Leave NULL in production.
+#' @param .media Testing seam: replacement for
+#'   \code{mx.client::mx_send_media}. Leave NULL in production. Supplying
+#'   all four seams together with \code{mx} lets poll and send run
+#'   without mx.client installed; \code{chat_typing()} and
+#'   \code{chat_resolve()} still require it.
 #' @return A \code{chat_client} of class \code{chat_matrix}.
 #' @export
 chat_matrix <- function(app = "chat.api", path = NULL, save_cursor = TRUE,
-                        mx = NULL) {
-    if (!requireNamespace("mx.client", quietly = TRUE)) {
+                        mx = NULL, .sync = NULL, .extract = NULL,
+                        .send = NULL, .media = NULL) {
+    seams <- list(.sync, .extract, .send, .media)
+    if ((is.null(mx) || any(vapply(seams, is.null, logical(1)))) &&
+        !requireNamespace("mx.client", quietly = TRUE)) {
         stop("chat_matrix() requires the 'mx.client' package. ",
              "Install it first.", call. = FALSE)
     }
@@ -35,7 +49,11 @@ chat_matrix <- function(app = "chat.api", path = NULL, save_cursor = TRUE,
     }
     env <- new.env(parent = emptyenv())
     env$mx <- mx
-    structure(list(env = env, app = app, save_cursor = isTRUE(save_cursor)),
+    structure(list(env = env, app = app, save_cursor = isTRUE(save_cursor),
+                   sync_fn = .sync %||% mx.client::mx_sync_update,
+                   extract_fn = .extract %||% mx.client::mx_extract_text_events,
+                   send_fn = .send %||% mx.client::mx_send_text,
+                   media_fn = .media %||% mx.client::mx_send_media),
               class = c("chat_matrix", "chat_client"))
 }
 
@@ -44,14 +62,13 @@ chat_poll.chat_matrix <- function(client, since = NULL, timeout = NULL, ...) {
     if (!is.null(since)) {
         client$env$mx$sync_token <- since
     }
-    res <- mx.client::mx_sync_update(client$env$mx,
-                                     timeout = as.integer((timeout %||% 0) * 1000),
-                                     save = client$save_cursor,
-                                     app = client$app)
+    res <- client$sync_fn(client$env$mx,
+                          timeout = as.integer((timeout %||% 0) * 1000),
+                          save = client$save_cursor,
+                          app = client$app)
     client$env$mx <- res$client
 
-    recs <- mx.client::mx_extract_text_events(res$sync,
-        self_id = res$client$user_id)
+    recs <- client$extract_fn(res$sync, self_id = res$client$user_id)
     messages <- lapply(recs, function(r) {
         ts <- if (is.null(r$ts)) {
             Sys.time()
@@ -81,7 +98,7 @@ chat_send.chat_matrix <- function(client, channel, text,
     markup <- match.arg(markup)
     if (!is.null(files)) {
         for (f in files) {
-            mx.client::mx_send_media(client$env$mx, f, room = channel)
+            client$media_fn(client$env$mx, f, room = channel)
         }
     }
     msgtype <- if (identical(kind, "notice")) {
@@ -91,9 +108,9 @@ chat_send.chat_matrix <- function(client, channel, text,
     } else {
         "m.text"
     }
-    id <- mx.client::mx_send_text(client$env$mx, text, room = channel,
-                                  msgtype = msgtype,
-                                  markdown = identical(markup, "markdown"))
+    id <- client$send_fn(client$env$mx, text, room = channel,
+                         msgtype = msgtype,
+                         markdown = identical(markup, "markdown"))
     invisible(as.character(id))
 }
 

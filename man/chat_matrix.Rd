@@ -3,7 +3,8 @@
 \alias{chat_matrix}
 \title{Create a Matrix chat client}
 \usage{
-chat_matrix(app = "chat.api", path = NULL, save_cursor = TRUE, mx = NULL)
+chat_matrix(app = "chat.api", path = NULL, save_cursor = TRUE, mx = NULL,
+            .sync = NULL, .extract = NULL, .send = NULL, .media = NULL)
 }
 \arguments{
 \item{app}{Application namespace passed to
@@ -18,6 +19,21 @@ persist the returned cursor themselves.}
 \item{mx}{A ready mx.client client config to wrap, for consumers
 that already load and manage one; NULL (default) loads via
 \code{app}/\code{path}.}
+
+\item{.sync}{Testing seam: replacement for
+\code{mx.client::mx_sync_update}. Leave NULL in production.}
+
+\item{.extract}{Testing seam: replacement for
+\code{mx.client::mx_extract_text_events}. Leave NULL in production.}
+
+\item{.send}{Testing seam: replacement for
+\code{mx.client::mx_send_text}. Leave NULL in production.}
+
+\item{.media}{Testing seam: replacement for
+\code{mx.client::mx_send_media}. Leave NULL in production. Supplying
+all four seams together with \code{mx} lets poll and send run
+without mx.client installed; \code{chat_typing()} and
+\code{chat_resolve()} still require it.}
 }
 \value{
 A \code{chat_client} of class \code{chat_matrix}.
