@@ -20,6 +20,12 @@ if (requireNamespace("mx.client", quietly = TRUE)) {
     expect_true("mx_client_session" %in% getNamespaceExports("mx.client"))
 }
 
+if (requireNamespace("mx.api", quietly = TRUE)) {
+    # chat_typing passes room, typing state, and timeout by name
+    typing_formals <- names(formals(mx.api::mx_typing))
+    expect_true(all(c("room_id", "typing", "timeout") %in% typing_formals))
+}
+
 # ---- Fixtures: a fake mx client config and a scripted sync ----
 
 fake_mx <- function(sync_token = NULL) {
@@ -99,6 +105,10 @@ if (requireNamespace("mx.client", quietly = TRUE)) {
     # (invites, reactions, E2EE) the generic contract does not model
     expect_identical(got$raw, fake_sync)
 
+    # first_run survives the trip out of the adapter. A consumer that
+    # never sees it treats every restart's backfill as new mail.
+    expect_false(got$first_run)
+
     # An explicit `since` overrides the stored token
     chat_poll(p, since = "s_forced")
     expect_identical(sync_calls$args[[2L]]$client$sync_token, "s_forced")
@@ -136,6 +146,34 @@ if (requireNamespace("mx.client", quietly = TRUE)) {
     # receives what it can send. The notice above does not come back.
     expect_false("a notice" %in% vapply(got2$messages, `[[`, "", "body"))
 
+    # A threaded reply arrives with $thread empty: the extractor keeps
+    # body/sender/msgtype/mentions and drops content$m.relates_to, so
+    # the relation never reaches the adapter. thread_replies reports
+    # FALSE for exactly this reason, and the two move together.
+    threaded <- list(rooms = list(join = list("!room:ex" = list(
+        timeline = list(events = list(
+            list(type = "m.room.message", event_id = "$4",
+                 sender = "@alice:ex", origin_server_ts = 1700000003000,
+                 content = list(msgtype = "m.text", body = "in a thread",
+                                m.relates_to = list(rel_type = "m.thread",
+                                                    event_id = "$root")))
+        ))
+    ))))
+    tp <- chat_matrix(mx = fake_mx(),
+                      .sync = function(client, ...) {
+                          list(sync = threaded, client = fake_mx("s1"),
+                               first_run = FALSE)
+                      },
+                      .send = function(...) "$id",
+                      .media = function(...) NULL)
+    tmsg <- chat_poll(tp)$messages[[1L]]
+    expect_identical(tmsg$body, "in a thread")
+    expect_null(tmsg$thread)
+    expect_false(chat_capabilities(tp)$thread_replies)
+    # the relation is still reachable through raw for consumers that
+    # want it before the adapter models threads
+    expect_identical(tmsg$raw$body, "in a thread")
+
     # An empty sync polls to empty without error
     quiet <- chat_matrix(mx = fake_mx(),
                          .sync = function(client, ...) {
@@ -147,6 +185,20 @@ if (requireNamespace("mx.client", quietly = TRUE)) {
     empty <- chat_poll(quiet)
     expect_identical(length(empty$messages), 0L)
     expect_identical(empty$cursor, "s0")
+    # A sync with no stored cursor reports the baseline, so a consumer
+    # can return early instead of replaying history as new traffic
+    expect_true(empty$first_run)
+
+    # A sync response that omits first_run reports FALSE, not NULL:
+    # the field is always present and always a single logical
+    silent <- chat_matrix(mx = fake_mx(),
+                          .sync = function(client, ...) {
+                              list(sync = list(rooms = list(join = list())),
+                                   client = fake_mx("s0"))
+                          },
+                          .send = function(...) "$id",
+                          .media = function(...) NULL)
+    expect_identical(chat_poll(silent)$first_run, FALSE)
 }
 
 # ---- Send: msgtype and markup mapping ----
@@ -211,7 +263,10 @@ expect_identical(send_calls$args[[6L]]$text, "see attached")
 caps <- chat_capabilities(s)
 # Matrix threads are replies, not first-class channels
 expect_false(caps$threads)
-expect_true(caps$thread_replies)
+# thread_replies stays FALSE while chat_poll cannot fill in $thread:
+# mx_extract_text_events drops content$m.relates_to, so the relation
+# never reaches the adapter. The flag and the mapping move together.
+expect_false(caps$thread_replies)
 expect_true(caps$reactions)
 expect_true(caps$files)
 expect_true(caps$typing)
@@ -230,4 +285,53 @@ if (requireNamespace("mx.client", quietly = TRUE)) {
                           .extract = function(...) list(),
                           .send = fake_send, .media = fake_media)
     expect_false(chat_typing(broken, "!room:ex", on = TRUE))
+
+    # The success path needs a config complete enough for
+    # mx_client_session(), so the real config -> session mapping runs;
+    # .typing stands in for the homeserver call.
+    typing_calls <- new.env()
+    typing_calls$args <- list()
+    fake_typing <- function(session, room_id, ...) {
+        typing_calls$args[[length(typing_calls$args) + 1L]] <- c(
+            list(session = session, room_id = room_id), list(...))
+        invisible(NULL)
+    }
+    ty <- chat_matrix(mx = list(user_id = "@bot:ex",
+                                server = "https://ex.invalid",
+                                token = "tok", device_id = "DEV"),
+                      .sync = function(...) NULL,
+                      .extract = function(...) list(),
+                      .send = fake_send, .media = fake_media,
+                      .typing = fake_typing)
+
+    expect_true(chat_typing(ty, "!room:ex"))
+    a1 <- typing_calls$args[[1L]]
+    expect_inherits(a1$session, "mx_session")
+    expect_identical(a1$room_id, "!room:ex")
+    expect_true(a1$typing)
+    # Default is 30 seconds, converted to the milliseconds mx.api wants
+    expect_identical(a1$timeout, 30000L)
+
+    # A caller working through a slow model turn picks its own window
+    expect_true(chat_typing(ty, "!room:ex", on = TRUE, timeout = 120))
+    expect_identical(typing_calls$args[[2L]]$timeout, 120000L)
+
+    # ... and clears it afterwards: the off path goes out as
+    # typing = FALSE rather than being dropped or inverted
+    expect_true(chat_typing(ty, "!room:ex", on = FALSE))
+    expect_false(typing_calls$args[[3L]]$typing)
+
+    # A NULL timeout falls back to the default instead of erroring
+    chat_typing(ty, "!room:ex", timeout = NULL)
+    expect_identical(typing_calls$args[[4L]]$timeout, 30000L)
+
+    # A failing homeserver call is still swallowed, seam or not
+    boom <- chat_matrix(mx = list(user_id = "@bot:ex",
+                                  server = "https://ex.invalid",
+                                  token = "tok", device_id = "DEV"),
+                        .sync = function(...) NULL,
+                        .extract = function(...) list(),
+                        .send = fake_send, .media = fake_media,
+                        .typing = function(...) stop("homeserver down"))
+    expect_false(chat_typing(boom, "!room:ex"))
 }

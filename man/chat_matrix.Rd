@@ -4,7 +4,8 @@
 \title{Create a Matrix chat client}
 \usage{
 chat_matrix(app = "chat.api", path = NULL, save_cursor = TRUE, mx = NULL,
-            .sync = NULL, .extract = NULL, .send = NULL, .media = NULL)
+            .sync = NULL, .extract = NULL, .send = NULL, .media = NULL,
+            .typing = NULL)
 }
 \arguments{
 \item{app}{Application namespace passed to
@@ -34,9 +35,18 @@ that already load and manage one; NULL (default) loads via
 all four seams together with \code{mx} lets poll and send run
 without mx.client installed; \code{chat_typing()} and
 \code{chat_resolve()} still require it.}
+
+\item{.typing}{Testing seam: replacement for
+\code{mx.api::mx_typing}. Leave NULL in production. It is resolved
+when \code{chat_typing()} is called, not here, so a NULL seam costs
+nothing on installs without mx.api.}
 }
 \value{
 A \code{chat_client} of class \code{chat_matrix}.
+  \code{\link{chat_poll}} on this class returns \code{first_run}
+  alongside \code{messages}, \code{cursor}, and \code{raw}: TRUE when
+  the sync started from no cursor, so the messages are a backfill
+  baseline rather than new traffic.
 }
 \description{
 Wraps an \code{mx.client} client config (see
