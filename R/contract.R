@@ -114,27 +114,48 @@ chat_disconnect.default <- function(client, ...) {
 
 #' Construct a normalized chat message
 #'
-#' The record every adapter's \code{\link{chat_poll}} returns. \code{raw}
-#' carries the untouched platform event for consumers that need more.
+#' The record every adapter's \code{\link{chat_poll}} returns.
 #'
 #' @param id Message identifier (character).
 #' @param channel Channel/room identifier (character).
 #' @param sender Sender identifier (character).
 #' @param body Message text (character).
-#' @param ts POSIXct timestamp.
+#' @param ts POSIXct timestamp of when the platform recorded the
+#'   message, or \code{NA} when the transport does not report one. It is
+#'   never a stand-in for the poll's wall clock: a consumer windowing or
+#'   ordering by \code{ts} has to be able to tell a real event time from
+#'   a missing one.
 #' @param thread Thread identifier or NULL.
 #' @param markup Source markup hint (character, e.g. "plain", "html").
-#' @param kind Message kind (character; "message" default).
-#' @param raw The platform-native event, unmodified.
+#' @param kind Message kind (character; "message" default). Contract
+#'   vocabulary, not platform vocabulary: \code{"message"},
+#'   \code{"notice"}, \code{"emote"}. Adapters translate their native
+#'   type into it on the way in, the same mapping \code{\link{chat_send}}
+#'   applies on the way out.
+#' @param self Logical: did this client send the message? Poll returns
+#'   the bot's own traffic like any other, so a consumer that replies to
+#'   inbound mail needs this to avoid answering itself. NULL when the
+#'   adapter cannot tell.
+#' @param mentions Character vector of user identifiers the message
+#'   explicitly mentioned (Matrix \code{m.mentions}, Slack user refs), or
+#'   NULL. The signal a bot in a multi-human room gates on; body
+#'   substring matching misses rich mentions that carry no plain text.
+#' @param raw The adapter's platform-native payload for this message,
+#'   exactly as the transport layer handed it over. Shape is
+#'   adapter-specific and may already be normalized by the transport
+#'   package (Matrix hands over an extracted record, not the timeline
+#'   event), so it is an escape hatch, not a guarantee of completeness.
 #' @return A list with class \code{chat_message}.
 #' @export
 chat_message <- function(id, channel, sender, body, ts, thread = NULL,
-                         markup = "plain", kind = "message", raw = NULL) {
+                         markup = "plain", kind = "message", self = NULL,
+                         mentions = NULL, raw = NULL) {
     stopifnot(is.character(id), is.character(channel), is.character(sender),
               is.character(body))
     structure(list(id = id, channel = channel, sender = sender,
                    body = body, ts = ts, thread = thread,
-                   markup = markup, kind = kind, raw = raw),
+                   markup = markup, kind = kind, self = self,
+                   mentions = mentions, raw = raw),
               class = "chat_message")
 }
 
