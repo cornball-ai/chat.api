@@ -115,9 +115,7 @@ matrix_event_times <- function(sync) {
 # message fail a cross-adapter `kind == "message"` filter that Slack,
 # IRC, and loopback traffic passes.
 matrix_kind <- function(msgtype) {
-    switch(msgtype %||% "m.text",
-           m.notice = "notice",
-           m.emote = "emote",
+    switch(msgtype %||% "m.text", m.notice = "notice", m.emote = "emote",
            "message")
 }
 
@@ -140,7 +138,8 @@ chat_poll.chat_matrix <- function(client, since = NULL, timeout = NULL, ...) {
     # reaching back into client$env$mx. Wiring it the other way round
     # retries with the token the homeserver just rejected and the second
     # rejection escapes the handler that would have caught it.
-    res <- if (client$relogin && requireNamespace("mx.client", quietly = TRUE)) {
+    res <- if (client$relogin &&
+        requireNamespace("mx.client", quietly = TRUE)) {
         mx.client::mx_with_relogin(client$env$mx, do_sync)
     } else {
         do_sync(client$env$mx)
@@ -198,9 +197,8 @@ chat_send.chat_matrix <- function(client, channel, text,
     media_ids <- character()
     if (!is.null(files)) {
         for (f in files) {
-            media_ids <- c(media_ids,
-                           as.character(client$media_fn(client$env$mx, f,
-                                                        room = channel)))
+            event <- client$media_fn(client$env$mx, f, room = channel)
+            media_ids <- c(media_ids, as.character(event))
         }
     }
     msgtype <- if (identical(kind, "notice")) {
@@ -216,9 +214,10 @@ chat_send.chat_matrix <- function(client, channel, text,
     # With no text event to name, the media event ids are what comes
     # back; otherwise the caller has nothing to redact or react to.
     if (!length(media_ids) || any(nzchar(text))) {
-        return(invisible(as.character(client$send_fn(client$env$mx, text,
-            room = channel, msgtype = msgtype,
-            markdown = identical(markup, "markdown"), ...))))
+        event <- client$send_fn(client$env$mx, text, room = channel,
+                                msgtype = msgtype,
+                                markdown = identical(markup, "markdown"), ...)
+        return(invisible(as.character(event)))
     }
     invisible(media_ids)
 }
