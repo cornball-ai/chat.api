@@ -3,3 +3,4 @@
 ^tasks$
 ^\.git$
 ^\.gitignore$
+^\\.github$
