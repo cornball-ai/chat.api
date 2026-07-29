@@ -47,7 +47,11 @@ exists.
 Client: `chat_connect(config) -> chat_client` (S3: c("chat_<adapter>", "chat_client"))
 
 Receive: `chat_poll(client, since = NULL, timeout = NULL) -> list(messages, cursor)`
-  - message: id, channel, thread, sender, body, markup, ts, kind, raw
+  - message: id, channel, thread, sender, body, markup, ts, kind, self,
+    mentions, raw
+  - self and mentions are what a bot needs to decide whether to answer:
+    without self it replies to its own echo, and without mentions it
+    misses a rich @-mention whose body carries no matching text
   - poll-shaped everywhere: long-poll transports map directly; socket
     transports buffer into the poll; cursor is opaque per adapter
     (Matrix since-token, Slack ts, Telegram offset, IRC position).
