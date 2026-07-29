@@ -434,3 +434,33 @@ expect_true(caps$typing)
 # Matrix has no per-message identity override
 expect_false(caps$identity_override)
 expect_identical(caps$markup_dialects, c("plain", "markdown"))
+
+# chat_send() returns every event it created, in send order. A caller
+# that tracks its own traffic by id has to see the attachment events too,
+# or each attachment's echo reads as somebody else's message.
+local({
+    sent <- new.env(); sent$media <- character(); sent$text <- 0L
+    cl <- chat_matrix(mx = fake_mx(),
+        .sync = function(...) NULL, .extract = function(...) list(),
+        .send = function(...) { sent$text <- sent$text + 1L; "$text1" },
+        .media = function(mx, file, ...) {
+            id <- paste0("$media", length(sent$media) + 1L)
+            sent$media <- c(sent$media, id)
+            id
+        })
+
+    # Text only: one id, as every other adapter returns.
+    expect_identical(chat_send(cl, "!r:ex", "hello"), "$text1")
+
+    # Files plus text: media first, text last, so the conversational
+    # event is always the final element.
+    ids <- chat_send(cl, "!r:ex", "see these", files = c("/a.png", "/b.png"))
+    expect_identical(ids, c("$media1", "$media2", "$text1"))
+    expect_identical(ids[[length(ids)]], "$text1")
+
+    # Attachment-only: the media ids and no empty text event.
+    before <- sent$text
+    only <- chat_send(cl, "!r:ex", "", files = "/c.png")
+    expect_identical(only, "$media3")
+    expect_identical(sent$text, before)
+})

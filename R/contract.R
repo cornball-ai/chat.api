@@ -40,7 +40,13 @@ chat_poll <- function(client, since = NULL, timeout = NULL, ...) {
 #' @param notify Logical; FALSE requests a silent delivery where
 #'   supported.
 #' @param ... Adapter-specific options.
-#' @return The sent message id (character), invisibly.
+#' @return Character vector of the message ids this call created, in the
+#'   order they were sent, invisibly. Usually length one. A platform that
+#'   splits a send into several events returns one id per event: the
+#'   Matrix adapter sends each attachment as its own event, so a send
+#'   with files returns the attachment ids followed by the text id.
+#'   Callers that track their own traffic by id must handle every
+#'   element, or an unclaimed event reads as somebody else's message.
 #' @export
 chat_send <- function(client, channel, text, markup = c("plain", "markdown"),
                       thread = NULL, reply_to = NULL, identity = NULL,

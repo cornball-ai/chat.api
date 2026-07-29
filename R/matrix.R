@@ -211,13 +211,16 @@ chat_send.chat_matrix <- function(client, channel, text,
     # An attachment-only send is the uploads and nothing else. Matrix
     # accepts an empty body and clients render it as a blank bubble, so
     # posting one after every file leaves visible litter in the room.
-    # With no text event to name, the media event ids are what comes
-    # back; otherwise the caller has nothing to redact or react to.
+    #
+    # Every event this call created comes back, media first, in the order
+    # they were sent. A caller that only sees the text event treats each
+    # attachment's echo as somebody else's message: corteza recognizes
+    # its own traffic by event id.
     if (!length(media_ids) || any(nzchar(text))) {
         event <- client$send_fn(client$env$mx, text, room = channel,
                                 msgtype = msgtype,
                                 markdown = identical(markup, "markdown"), ...)
-        return(invisible(as.character(event)))
+        return(invisible(c(media_ids, as.character(event))))
     }
     invisible(media_ids)
 }
