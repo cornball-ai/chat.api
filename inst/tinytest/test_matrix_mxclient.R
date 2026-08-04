@@ -53,6 +53,53 @@ if (requireNamespace("mx.api", quietly = TRUE)) {
     expect_identical(typing_formals[1L], "session")
 }
 
+# ---- Markdown table route ----
+
+# Matrix is the chat.api adapter where Markdown tables need a transport
+# conversion: chat.api keeps the source as markdown, mx.client renders it to
+# Matrix custom HTML, and mx.api receives the final event. Stub only the final
+# mx.api network call so this exercises the real chat.api -> mx.client path.
+if (requireNamespace("mx.api", quietly = TRUE)) {
+    sent <- new.env()
+    sent$args <- list()
+    orig_mx_send <- mx.api::mx_send
+    assignInNamespace("mx_send", function(session, room_id, body,
+                                          msgtype = "m.text", extra = NULL) {
+        sent$args[[length(sent$args) + 1L]] <<- list(
+            session = session, room_id = room_id, body = body,
+            msgtype = msgtype, extra = extra)
+        "$table:ex"
+    }, ns = "mx.api")
+    on.exit(assignInNamespace("mx_send", orig_mx_send, ns = "mx.api"),
+            add = TRUE)
+
+    table_md <- paste(c(
+        "| package | days per submission | latest |",
+        "|---|---:|---:|",
+        "| `llm.api` | 20.8 | 2026-06-26 |",
+        "| `tinyrox` | 52.5 | 2026-06-24 |"
+    ), collapse = "\n")
+    p_table <- chat_matrix(mx = list(user_id = "@bot:ex",
+                                     server = "https://ex.invalid",
+                                     token = "tok", device_id = "DEV",
+                                     room_id = "!default:ex"),
+                           .sync = function(...) NULL,
+                           .extract = function(...) list(),
+                           .media = function(...) NULL)
+    expect_identical(chat_send(p_table, "!room:ex", table_md,
+                               markup = "markdown"), "$table:ex")
+    routed <- sent$args[[1L]]
+    expect_identical(routed$room_id, "!room:ex")
+    expect_identical(routed$body, table_md)
+    expect_identical(routed$msgtype, "m.text")
+    expect_identical(routed$extra$format, "org.matrix.custom.html")
+    expect_true(grepl("<table>", routed$extra$formatted_body, fixed = TRUE))
+    expect_true(grepl("<td><code>llm.api</code></td>",
+                      routed$extra$formatted_body, fixed = TRUE))
+    expect_true(grepl("<td align=\"right\">20.8</td>",
+                      routed$extra$formatted_body, fixed = TRUE))
+}
+
 # ---- Fixtures ----
 
 fake_mx <- function(sync_token = NULL, room_id = NULL) {
