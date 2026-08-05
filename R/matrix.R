@@ -112,6 +112,10 @@
 #'   \code{mx.client::mx_client_save}. Leave NULL in production. Only
 #'   reached on an \code{e2ee} client, which writes the sync cursor after
 #'   the crypto state rather than inside the sync.
+#' @param .react Testing seam: replacement for \code{mx.api::mx_react}.
+#'   Leave NULL in production. Resolved when \code{chat_react()} is
+#'   called, not here, so a NULL seam costs nothing on installs without
+#'   mx.api.
 #' @return A \code{chat_client} of class \code{chat_matrix}.
 #'   \code{\link{chat_poll}} on this class returns \code{first_run} and
 #'   \code{client} alongside \code{messages}, \code{cursor}, and
@@ -126,7 +130,7 @@ chat_matrix <- function(app = NULL, path = NULL, save_cursor = TRUE,
                         mx = NULL, relogin = TRUE, e2ee = FALSE,
                         crypto_store = NULL, .sync = NULL, .extract = NULL,
                         .send = NULL, .media = NULL, .typing = NULL,
-                        .crypto = NULL, .save = NULL) {
+                        .crypto = NULL, .save = NULL, .react = NULL) {
     seams <- list(.sync, .extract, .send, .media)
     if ((is.null(mx) || any(vapply(seams, is.null, logical(1)))) &&
         !requireNamespace("mx.client", quietly = TRUE)) {
@@ -178,7 +182,8 @@ chat_matrix <- function(app = NULL, path = NULL, save_cursor = TRUE,
                    # that configuration. It is resolved where it is used,
                    # on the deferred-save path, which only e2ee reaches.
                    save_fn = .save,
-                   typing_fn = .typing, crypto_ops = matrix_crypto_ops(.crypto)),
+                   typing_fn = .typing, react_fn = .react,
+                   crypto_ops = matrix_crypto_ops(.crypto)),
               class = c("chat_matrix", "chat_client"))
 }
 
@@ -225,18 +230,51 @@ matrix_event_order <- function(sync) {
     out
 }
 
-# Sort messages into sync order. Unpositioned events keep their arrival
-# order at the end rather than being dropped or interleaved by guesswork,
-# and the tie-break on index makes the result deterministic either way.
-matrix_order_messages <- function(messages, positions) {
-    if (length(messages) < 2L) {
-        return(messages)
+# The sync's reactions, as contract records, in the homeserver's order.
+#
+# Empty when the extractor seam is in play but predates the reaction
+# extractor: mx.client gained mx_extract_reactions() in 0.2.0.3, and a
+# client built against an older one should report no reactions rather
+# than fail every poll. chat_capabilities()$reaction_events says the same
+# thing, so the two cannot disagree.
+matrix_reactions <- function(client, sync, positions) {
+    if (!matrix_reactions_available()) {
+        return(list())
     }
-    pos <- vapply(messages, function(m) {
-        p <- positions[[as.character(m$id)]]
+    recs <- mx.client::mx_extract_reactions(sync,
+        self_id = client$env$mx$user_id)
+    out <- lapply(recs, function(r) {
+        ms <- r$ts
+        chat_reaction(id = r$event_id,
+                      channel = as.character(r$room_id),
+                      sender = as.character(r$sender),
+                      target = as.character(r$target_event_id),
+                      key = as.character(r$key),
+                      ts = if (is.null(ms)) as.POSIXct(NA) else
+                      as.POSIXct(ms / 1000, origin = "1970-01-01"),
+                      self = isTRUE(r$is_self), raw = r)
+    })
+    matrix_order_by_position(out, positions)
+}
+
+matrix_reactions_available <- function() {
+    requireNamespace("mx.client", quietly = TRUE) &&
+    "mx_extract_reactions" %in% getNamespaceExports("mx.client")
+}
+
+# Sort messages or reactions into sync order, by their own event id.
+# Unpositioned events keep their arrival order at the end rather than
+# being dropped or interleaved by guesswork, and the tie-break on index
+# makes the result deterministic either way.
+matrix_order_by_position <- function(records, positions) {
+    if (length(records) < 2L) {
+        return(records)
+    }
+    pos <- vapply(records, function(r) {
+        p <- positions[[as.character(r$id)]]
         if (is.null(p)) Inf else as.numeric(p)
     }, numeric(1))
-    messages[order(pos, seq_along(pos))]
+    records[order(pos, seq_along(pos))]
 }
 
 # Matrix msgtype -> the contract's kind vocabulary. chat_send maps the
@@ -377,7 +415,7 @@ chat_poll.chat_matrix <- function(client, since = NULL, timeout = NULL, ...) {
     # backwards -- which reorders a room's commands against the messages
     # they act on. Anything the sync did not position sorts last, in the
     # order it arrived.
-    messages <- matrix_order_messages(messages, event_pos)
+    messages <- matrix_order_by_position(messages, event_pos)
     # first_run says the sync ran without a stored cursor, so these
     # messages are the homeserver's backfill baseline, not new traffic.
     # A consumer that drops it replays its whole history as fresh mail
@@ -389,10 +427,17 @@ chat_poll.chat_matrix <- function(client, since = NULL, timeout = NULL, ...) {
     # with the token the homeserver just rejected.
     #
     # raw carries the full sync response for Matrix-specific consumers
-    # (invites, reactions) that the generic contract does not model yet.
-    # E2EE no longer needs it.
+    # (invites) that the generic contract does not model yet. E2EE and
+    # reactions no longer need it.
+    #
+    # reactions follows messages exactly: returned on a first run too,
+    # with first_run left to say what they are. A consumer that acts on
+    # reactions has the same backfill problem it has with messages and
+    # solves it the same way -- what it must not have to learn is that
+    # one of the two lists plays by a different rule.
     list(messages = messages, cursor = res$client$sync_token,
          first_run = isTRUE(res$first_run), client = res$client,
+         reactions = matrix_reactions(client, res$sync, event_pos),
          raw = res$sync)
 }
 
@@ -486,6 +531,16 @@ chat_typing.chat_matrix <- function(client, channel, on = TRUE, timeout = 30,
 }
 
 #' @export
+chat_react.chat_matrix <- function(client, channel, message_id, key, ...) {
+    # Errors propagate, unlike chat_typing()'s. A dropped typing
+    # indicator costs nothing; a dropped reaction is an acknowledgement
+    # the sender believes it made and no one can see.
+    react_fn <- client$react_fn %||% mx.api::mx_react
+    invisible(react_fn(mx.client::mx_client_session(client$env$mx), channel,
+                       message_id, key))
+}
+
+#' @export
 chat_resolve.chat_matrix <- function(client, name, ...) {
     mx.client::mx_resolve_room(client$env$mx, name)
 }
@@ -510,9 +565,12 @@ chat_capabilities.chat_matrix <- function(client, ...) {
     # a consumer cannot tell which reading a given flag was written
     # under.
     #
-    # reactions is FALSE because chat.api has no reaction verb to call
-    # and mx_extract_text_events filters to m.text, so an m.reaction can
-    # be neither sent nor received here.
+    # reactions and reaction_events are both TRUE: mx.api::mx_react()
+    # places one and mx.client::mx_extract_reactions() reports the rest.
+    # reaction_events tracks what is actually installed rather than
+    # asserting it, because an mx.client older than 0.2.0.3 has no
+    # reaction extractor and chat_poll would report an empty list forever
+    # while the flag said otherwise.
     #
     # e2ee answers for this client, not for Matrix and not for the
     # installed packages: it is TRUE when this client was built with
@@ -529,7 +587,8 @@ chat_capabilities.chat_matrix <- function(client, ...) {
     # attachments to an encrypted room. TRUE would advertise something
     # that fails in exactly the rooms such a client exists for.
     list(threads = FALSE, thread_replies = FALSE, edits = FALSE,
-         reactions = FALSE, files = !isTRUE(client$e2ee), typing = TRUE,
+         reactions = TRUE, reaction_events = matrix_reactions_available(),
+         files = !isTRUE(client$e2ee), typing = TRUE,
          e2ee = isTRUE(client$e2ee), identity_override = FALSE,
          markup_dialects = c("plain", "markdown"),
          max_message_bytes = NA_integer_)

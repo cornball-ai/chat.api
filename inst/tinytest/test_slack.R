@@ -163,3 +163,64 @@ expect_true(as.numeric(s1$cursor$lab) >= t_now - 1)
 s2 <- chat_poll(cl2)
 expect_identical(length(s2$messages), 1L)
 expect_identical(s2$messages[[1L]]$body, "fresh message")
+
+# ---- Reactions ----
+# Implemented here as well as on Matrix, in the same change as the
+# generic: an interface with one implementer is a shape traced around
+# that implementer. Slack is what proves this one is not Matrix-shaped.
+
+local({
+    seen <- NULL
+    cl <- chat_slack(channels = "lab", token = "xoxb-test",
+                     .history = function(...) NULL,
+                     .post = function(...) "1.1",
+                     .react = function(path, ..., .method, token) {
+                         seen <<- c(list(path = path, .method = .method,
+                                         token = token), list(...))
+                         list(ok = TRUE)
+                     })
+    # Slack gives a reaction no identity of its own, so TRUE is the
+    # honest answer rather than a fabricated id.
+    expect_true(chat_react(cl, "#lab", "1700000000.000100", "thumbsup"))
+    expect_identical(seen$path, "/api/reactions.add")
+    expect_identical(seen$.method, "POST")
+    expect_identical(seen$token, "xoxb-test")
+    # timestamp, not "event id": Slack addresses a message by its ts.
+    expect_identical(seen$timestamp, "1700000000.000100")
+    # The leading # is stripped, matching what every other Slack call here
+    # sends.
+    expect_identical(seen$channel, "lab")
+    # Colons are how the same emoji is written in Slack prose and are
+    # rejected by the API.
+    expect_identical(seen$name, "thumbsup")
+})
+
+local({
+    seen <- NULL
+    cl <- chat_slack(channels = "lab", token = "t",
+                     .history = function(...) NULL, .post = function(...) "1",
+                     .react = function(path, ...) { seen <<- list(...); TRUE })
+    chat_react(cl, "lab", "1.1", ":tada:")
+    expect_identical(seen$name, "tada")
+})
+
+# A failing call propagates rather than reporting a reaction that was
+# never placed.
+expect_error(chat_react(chat_slack(channels = "lab", token = "t",
+                                   .history = function(...) NULL,
+                                   .post = function(...) "1",
+                                   .react = function(...) stop("not_in_channel")),
+                        "lab", "1.1", "x"),
+             "not_in_channel")
+
+# The capability pair is honest in both directions. reactions was TRUE
+# here before any verb existed to back it; reaction_events is FALSE
+# because conversations.history reports reactions as an aggregate on the
+# message, with no per-reaction id or timestamp to build a record from.
+local({
+    caps <- chat_capabilities(chat_slack(channels = "lab", token = "t",
+                                         .history = function(...) NULL,
+                                         .post = function(...) "1"))
+    expect_true(caps$reactions)
+    expect_false(caps$reaction_events)
+})

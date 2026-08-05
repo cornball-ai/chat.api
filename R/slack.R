@@ -37,11 +37,14 @@
 #' @param .post Testing seam: replacement for
 #'   \code{slackr::slackr_msg}. Leave NULL in production; when both
 #'   seams are supplied the slackr package is not required.
+#' @param .react Testing seam: replacement for
+#'   \code{slackr::call_slack_api}. Leave NULL in production. Resolved
+#'   when \code{chat_react()} is called, not here.
 #' @return A \code{chat_client} of class \code{chat_slack}.
 #' @export
 chat_slack <- function(channels = character(),
                        token = Sys.getenv("SLACK_TOKEN"), username = NULL,
-                       .history = NULL, .post = NULL) {
+                       .history = NULL, .post = NULL, .react = NULL) {
     if ((is.null(.history) || is.null(.post)) &&
         !requireNamespace("slackr", quietly = TRUE)) {
         stop("chat_slack() requires the 'slackr' package. ",
@@ -55,7 +58,8 @@ chat_slack <- function(channels = character(),
     structure(list(env = env, channels = sub("^#", "", channels),
                    token = token, username = username,
                    history_fn = .history %||% slackr::slackr_history,
-                   post_fn = .post %||% slackr::slackr_msg),
+                   post_fn = .post %||% slackr::slackr_msg,
+                   react_fn = .react),
               class = c("chat_slack", "chat_client"))
 }
 
@@ -208,14 +212,45 @@ chat_send.chat_slack <- function(client, channel, text,
 }
 
 #' @export
+chat_react.chat_slack <- function(client, channel, message_id, key, ...) {
+    # reactions.add through slackr's generic Web API caller: slackr has
+    # no reaction helper of its own, and calling the endpoint directly
+    # would put an HTTP dependency in a package that has none.
+    #
+    # key goes through unchanged except for stripping colons, which are
+    # how the same emoji is written in Slack prose (":thumbsup:") and are
+    # rejected by the API. Translating a Matrix-style emoji character
+    # into a Slack short name would have to guess, so it does not -- the
+    # contract says the two platforms take different keys.
+    react_fn <- client$react_fn %||% slackr::call_slack_api
+    react_fn("/api/reactions.add", .method = "POST", token = client$token,
+             channel = sub("^#", "", channel), timestamp = message_id,
+             name = gsub(":", "", key))
+    # No id comes back: reactions.add answers {ok: true} and Slack gives a
+    # reaction no identity of its own.
+    invisible(TRUE)
+}
+
+#' @export
 chat_resolve.chat_slack <- function(client, name, ...) {
     sub("^#", "", name)
 }
 
 #' @export
 chat_capabilities.chat_slack <- function(client, ...) {
+    # reactions has been TRUE since before there was a chat_react() to
+    # back it -- the flag claimed something no verb could deliver. It is
+    # true now.
+    #
+    # reaction_events is FALSE. conversations.history, which this adapter
+    # polls, reports reactions as an aggregate on the message
+    # ({name, users, count}) rather than as events: no per-reaction id and
+    # no per-reaction timestamp, so there is nothing to build a
+    # chat_reaction() from that a consumer could deduplicate across polls.
+    # Reading them as events needs the Events API or Socket Mode, which is
+    # a different transport than this one.
     list(threads = TRUE, thread_replies = FALSE, edits = FALSE,
-         reactions = TRUE, files = FALSE, typing = FALSE, e2ee = FALSE,
-         identity_override = TRUE, markup_dialects = c("plain", "markdown"),
-         max_message_bytes = 40000L)
+         reactions = TRUE, reaction_events = FALSE, files = FALSE,
+         typing = FALSE, e2ee = FALSE, identity_override = TRUE,
+         markup_dialects = c("plain", "markdown"), max_message_bytes = 40000L)
 }
