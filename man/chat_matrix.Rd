@@ -59,15 +59,18 @@ cleartext only, no crypto state, and \code{e2ee} stays FALSE in
 which needs a Rust toolchain, and both \code{user_id} and
 \code{device_id} on the wrapped config.
 
-Three things change when it is on. The crypto state is built on the
-first poll or send rather than here, so key publication happens after
-a relogin rather than before one. The sync cursor is written after
-the crypto state instead of inside the sync, so a sync carrying a
-room key is not marked consumed until that key is on disk. And
-attachments are refused in encrypted rooms, because Matrix media
-uploads are not encrypted by this adapter --
-\code{\link{chat_capabilities}} reports \code{files = FALSE} to
-match.}
+Three things change when it is on. The crypto state is built on
+first use rather than here: from \code{\link{chat_poll}} that means
+key publication happens after the sync, so a relogin has already
+replaced a rejected token, while a \code{\link{chat_send}} that runs
+before any poll publishes with the token it has -- the same exposure
+any direct send already carries, since \code{mx_with_relogin()}
+wraps only the sync. The sync cursor is held back until the crypto
+state is safe, on disk and on the client, so a sync carrying a room
+key is not marked consumed until that key is stored. And attachments
+are refused in encrypted rooms, because Matrix media uploads are not
+encrypted by this adapter -- \code{\link{chat_capabilities}} reports
+\code{files = FALSE} to match.}
 
 \item{crypto_store}{Character or NULL. Directory holding the pickled
 Olm account and sessions. NULL derives it from \code{app} via

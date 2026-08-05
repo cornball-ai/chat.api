@@ -43,11 +43,17 @@ wrap_sync <- function(events, room = "!room:ex") {
 # send and media are named parameters rather than `...` pass-throughs so
 # a test can watch the cleartext path without colliding with the defaults
 # this helper already supplies.
+#
+# save is seamed too. An e2ee client defers the cursor write out of the
+# sync, and the real writer is mx.client::mx_client_save -- correct in
+# production, and the one thing that would make this file need mx.client
+# after all.
 seam_client <- function(recs = list(), sync = wrap_sync(list()),
                         first_run = FALSE, token = "s1", mx = fake_mx(),
                         record = NULL, send = function(...) "$id",
-                        media = function(...) NULL, ...) {
-    chat_matrix(mx = mx,
+                        media = function(...) NULL,
+                        save = function(client, ...) client, ...) {
+    chat_matrix(mx = mx, .save = save,
         .sync = function(client, ...) {
             if (!is.null(record)) {
                 record$sync[[length(record$sync) + 1L]] <- c(
@@ -576,13 +582,26 @@ expect_error(chat_poll(seam_client(e2ee = TRUE,
                                    .crypto = fake_crypto(init_error = TRUE)$ops)),
              "keys could not be published")
 
-# The first poll builds it, off the post-sync config rather than the one
-# the client was constructed with -- that is the whole point of waiting.
+# The first poll builds it off the post-sync credentials rather than the
+# ones the client was constructed with -- that is the whole point of
+# waiting, since a relogin during the sync is what replaces a rejected
+# token. Asserted on the access token, not the cursor: the cursor is
+# deliberately still the pre-sync one at this point, held back until the
+# crypto state is safe.
 f <- fake_crypto()
-enc <- seam_client(e2ee = TRUE, .crypto = f$ops, token = "after-relogin")
+enc <- chat_matrix(mx = fake_mx(), e2ee = TRUE, .crypto = f$ops,
+                   .sync = function(client, ...) {
+                       c2 <- fake_mx("advanced")
+                       c2$token <- "after-relogin"
+                       list(sync = wrap_sync(list()), client = c2,
+                            first_run = FALSE)
+                   },
+                   .extract = function(...) list(),
+                   .send = function(...) "$id", .media = function(...) NULL,
+                   .save = function(client, ...) client)
 chat_poll(enc)
 expect_identical(length(f$log$init), 1L)
-expect_identical(f$log$init[[1L]]$mx$sync_token, "after-relogin")
+expect_identical(f$log$init[[1L]]$mx$token, "after-relogin")
 expect_true(is.environment(enc$env$crypto))
 # Later polls reuse it.
 chat_poll(enc)
@@ -902,7 +921,7 @@ saves <- new.env(parent = emptyenv())
 saves$order <- character()
 saved_client <- function(f, ...) {
     seam_client(e2ee = TRUE, .crypto = f$ops,
-                .save = function(client, app = NULL, ...) {
+                save = function(client, app = NULL, ...) {
                     saves$order <- c(saves$order, "cursor")
                     client
                 }, ...)
@@ -929,6 +948,53 @@ f <- fake_crypto(decrypt_error = TRUE)
 saves$order <- character()
 expect_error(chat_poll(saved_client(f)), "no session for that megolm stream")
 expect_identical(saves$order, character())
+
+# ... and "not consumed" has to hold in memory too, not just on disk.
+# Leaving the advanced cursor on the client only moved the skip: a caller
+# that catches the error and polls the same client again would resume
+# past the sync whose room keys were lost, and the homeserver never
+# re-sends them.
+f <- fake_crypto(decrypt_error = TRUE)
+retry <- seam_client(e2ee = TRUE, .crypto = f$ops, token = "advanced",
+                     mx = fake_mx(sync_token = "before"),
+                     save = function(client, ...) client)
+expect_error(chat_poll(retry), "no session")
+expect_identical(retry$env$mx$sync_token, "before")
+# The next poll asks from where the failed one started.
+trace6 <- new.env(); trace6$sync <- list(); trace6$extract <- list()
+retry2 <- seam_client(e2ee = TRUE, .crypto = f$ops, token = "advanced",
+                      mx = fake_mx(sync_token = "before"), record = trace6,
+                      save = function(client, ...) client)
+expect_error(chat_poll(retry2), "no session")
+expect_error(chat_poll(retry2), "no session")
+expect_identical(trace6$sync[[2L]]$client$sync_token, "before")
+
+# A relogin's refreshed credentials survive the rollback: a rotated token
+# is not what makes a sync consumed, and dropping it would have the retry
+# authenticate with the one the homeserver just rejected.
+f <- fake_crypto(decrypt_error = TRUE)
+rl <- chat_matrix(mx = fake_mx(sync_token = "before"), e2ee = TRUE,
+                  .crypto = f$ops,
+                  .sync = function(client, ...) {
+                      c2 <- fake_mx("advanced")
+                      c2$token <- "rotated"
+                      list(sync = wrap_sync(list()), client = c2,
+                           first_run = FALSE)
+                  },
+                  .extract = function(...) list(),
+                  .send = function(...) "$id", .media = function(...) NULL,
+                  .save = function(client, ...) client)
+expect_error(chat_poll(rl), "no session")
+expect_identical(rl$env$mx$token, "rotated")
+expect_identical(rl$env$mx$sync_token, "before")
+
+# A successful poll does advance it, or nothing would ever move.
+f <- fake_crypto()
+ok <- seam_client(e2ee = TRUE, .crypto = f$ops, token = "advanced",
+                  mx = fake_mx(sync_token = "before"),
+                  save = function(client, ...) client)
+chat_poll(ok)
+expect_identical(ok$env$mx$sync_token, "advanced")
 
 # save_cursor = FALSE still means nothing is written, either way.
 f <- fake_crypto()
@@ -1008,11 +1074,9 @@ expect_error(chat.api:::matrix_crypto_bind_identity(
     store, fake_mx(user_id = "@a:ex", device_id = "D2")),
     "belongs to")
 # The collision the sanitization allows is caught by the same check.
-expect_identical(
-    chat.api:::matrix_crypto_store(fake_mx(user_id = "@a/b:ex",
-                                           device_id = "D"), app = "t"),
-    chat.api:::matrix_crypto_store(fake_mx(user_id = "@a_b:ex",
-                                           device_id = "D"), app = "t"))
+# (That the two identities really do share a directory is asserted in
+# test_matrix_mxclient.R: resolving the path calls into mx.client, and
+# nothing in this file may.)
 shared <- tempfile("chatapi-collide")
 chat.api:::matrix_crypto_bind_identity(shared, fake_mx(user_id = "@a/b:ex",
                                                       device_id = "D"))
@@ -1067,3 +1131,38 @@ two <- list(rooms = list(join = list(
     `!r2:ex` = list(timeline = list(events = list(ev("$b")))))))
 expect_identical(pos(two)[["$a"]], 1L)
 expect_identical(pos(two)[["$b"]], 2L)
+
+# ---- The four seams still run without mx.client ----
+# chat_matrix() documents mx plus .sync/.extract/.send/.media as enough
+# to poll and send on a host with no mx.client. That works because `%||%`
+# is lazy: the mx.client:: default on each of those four is never forced
+# when a seam is supplied. Adding a fifth default that was resolved
+# unconditionally broke it for every client, cleartext ones included, and
+# turned both CI legs red with "there is no package called 'mx.client'".
+#
+# The proof has to be that no mx.client symbol is referenced eagerly, and
+# an installed mx.client makes that invisible here -- so this reads the
+# constructor's own body instead of relying on the environment.
+ctor <- deparse(body(chat_matrix))
+defaults <- grep("mx\\.client::", ctor, value = TRUE)
+# Every remaining mx.client:: reference in the returned list is behind a
+# `%||%` whose left side is a seam.
+listed <- grep("_fn = ", defaults, value = TRUE)
+expect_true(all(grepl("%\\|\\|%", listed)))
+expect_false(any(grepl("save_fn = .*mx\\.client::", ctor)))
+
+# And by construction: a client built the documented way never touches
+# save_fn's default, because only the deferred-save path resolves one.
+seamed <- chat_matrix(mx = fake_mx(), .sync = function(...) NULL,
+                      .extract = function(...) list(),
+                      .send = function(...) "$id",
+                      .media = function(...) NULL)
+expect_null(seamed$save_fn)
+expect_false(seamed$e2ee)
+# A supplied .save is kept verbatim rather than being wrapped.
+mine <- function(client, ...) client
+expect_identical(chat_matrix(mx = fake_mx(), .sync = function(...) NULL,
+                             .extract = function(...) list(),
+                             .send = function(...) "$id",
+                             .media = function(...) NULL,
+                             .save = mine)$save_fn, mine)

@@ -42,15 +42,18 @@
 #'   which needs a Rust toolchain, and both \code{user_id} and
 #'   \code{device_id} on the wrapped config.
 #'
-#'   Three things change when it is on. The crypto state is built on the
-#'   first poll or send rather than here, so key publication happens after
-#'   a relogin rather than before one. The sync cursor is written after
-#'   the crypto state instead of inside the sync, so a sync carrying a
-#'   room key is not marked consumed until that key is on disk. And
-#'   attachments are refused in encrypted rooms, because Matrix media
-#'   uploads are not encrypted by this adapter --
-#'   \code{\link{chat_capabilities}} reports \code{files = FALSE} to
-#'   match.
+#'   Three things change when it is on. The crypto state is built on
+#'   first use rather than here: from \code{\link{chat_poll}} that means
+#'   key publication happens after the sync, so a relogin has already
+#'   replaced a rejected token, while a \code{\link{chat_send}} that runs
+#'   before any poll publishes with the token it has -- the same exposure
+#'   any direct send already carries, since \code{mx_with_relogin()}
+#'   wraps only the sync. The sync cursor is held back until the crypto
+#'   state is safe, on disk and on the client, so a sync carrying a room
+#'   key is not marked consumed until that key is stored. And attachments
+#'   are refused in encrypted rooms, because Matrix media uploads are not
+#'   encrypted by this adapter -- \code{\link{chat_capabilities}} reports
+#'   \code{files = FALSE} to match.
 #' @param crypto_store Character or NULL. Directory holding the pickled
 #'   Olm account and sessions. NULL derives it from \code{app} via
 #'   \code{mx.client::mx_crypto_store_dir()}, with a per-device
@@ -140,7 +143,16 @@ chat_matrix <- function(app = NULL, path = NULL, save_cursor = TRUE,
                    extract_fn = .extract %||% mx.client::mx_extract_text_events,
                    send_fn = .send %||% mx.client::mx_send_text,
                    media_fn = .media %||% mx.client::mx_send_media,
-                   save_fn = .save %||% mx.client::mx_client_save,
+                   # Left unresolved, like typing_fn. The four seams above
+                   # are only defaulted when their seam is NULL, and R's
+                   # lazy `%||%` never forces the mx.client side when one
+                   # is supplied -- which is what makes the documented
+                   # four-seams-without-mx.client configuration work.
+                   # Defaulting this one here forced mx.client on every
+                   # client, cleartext ones included, and broke exactly
+                   # that configuration. It is resolved where it is used,
+                   # on the deferred-save path, which only e2ee reaches.
+                   save_fn = .save,
                    typing_fn = .typing, crypto_ops = matrix_crypto_ops(.crypto)),
               class = c("chat_matrix", "chat_client"))
 }
@@ -251,7 +263,20 @@ chat_poll.chat_matrix <- function(client, since = NULL, timeout = NULL, ...) {
     } else {
         do_sync(client$env$mx)
     }
-    client$env$mx <- res$client
+    # On an e2ee client the advanced cursor is held back until the crypto
+    # state is safe, in memory as well as on disk. Keeping the cursor off
+    # disk but live on the client only moves the skip: a caller that
+    # catches the decrypt error and polls the same client again resumes
+    # from the token the failed sync produced, and the room keys in it are
+    # gone for good. The refreshed credentials are kept either way -- a
+    # relogin is not what makes a sync consumed.
+    if (isTRUE(client$e2ee)) {
+        held <- res$client
+        held$sync_token <- client$env$mx$sync_token
+        client$env$mx <- held
+    } else {
+        client$env$mx <- res$client
+    }
 
     # Crypto runs before the cursor is committed and after the sync has
     # succeeded: after, so a relogin has already replaced a rejected token
@@ -267,10 +292,13 @@ chat_poll.chat_matrix <- function(client, since = NULL, timeout = NULL, ...) {
     if (isTRUE(client$e2ee)) {
         crypto <- matrix_crypto_require(client)
         dec <- client$crypto_ops$decrypt(crypto, res$sync, client$env$mx)
-    }
-    if (defer_save) {
-        client$env$mx <- client$save_fn(client$env$mx, app = client$app)
-        res$client <- client$env$mx
+        if (defer_save) {
+            save_fn <- client$save_fn %||% mx.client::mx_client_save
+            res$client <- save_fn(res$client, app = client$app)
+        }
+        # Nothing above threw, so the sync is consumed and its cursor
+        # becomes the live one.
+        client$env$mx <- res$client
     }
 
     event_ts <- matrix_event_times(res$sync)

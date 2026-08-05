@@ -496,3 +496,27 @@ if (requireNamespace("mx.crypto", quietly = TRUE)) {
         unlink(store, recursive = TRUE)
     })
 }
+
+# The store path is per device, and its sanitization is not injective:
+# "@a/b:ex" and "@a_b:ex" resolve to the same directory. That is why the
+# identity is written into the store and compared on open -- the
+# collision is caught there, in test_matrix.R. Resolving the path calls
+# mx_crypto_store_dir(), which is why this half lives here.
+local({
+    a <- list(user_id = "@a/b:ex", device_id = "D")
+    b <- list(user_id = "@a_b:ex", device_id = "D")
+    expect_identical(chat.api:::matrix_crypto_store(a, app = "t"),
+                     chat.api:::matrix_crypto_store(b, app = "t"))
+    # Two devices of one user are two stores, and two users are two too.
+    one <- list(user_id = "@a:ex", device_id = "D1")
+    two <- list(user_id = "@a:ex", device_id = "D2")
+    expect_false(identical(chat.api:::matrix_crypto_store(one, app = "t"),
+                           chat.api:::matrix_crypto_store(two, app = "t")))
+    expect_false(identical(chat.api:::matrix_crypto_store(one, app = "t"),
+                           chat.api:::matrix_crypto_store(
+                               list(user_id = "@b:ex", device_id = "D1"),
+                               app = "t")))
+    # It sits under mx.client's own store convention for the app.
+    expect_true(startsWith(chat.api:::matrix_crypto_store(one, app = "t"),
+                           mx.client::mx_crypto_store_dir(app = "t")))
+})

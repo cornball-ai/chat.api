@@ -27,5 +27,43 @@ jobs:
       - name: Dependencies
         run: ./run.sh install_deps
 
+      # test_matrix_mxclient.R exit_file()s without mx.client, and that
+      # file holds the direct tests for the crypto boundary functions --
+      # the encryption-state lookup and the encrypted send, both of which
+      # leak if they fail open. They sit behind chat_matrix()'s .crypto
+      # seam, so nothing in test_matrix.R can reach them. install_deps
+      # takes hard dependencies only, so without this they skip
+      # themselves into a green check.
+      - name: Install Matrix stack
+        run: |
+          for pkg in mx.api mx.client; do
+            git clone --depth 1 "https://github.com/cornball-ai/$pkg.git" "$RUNNER_TEMP/$pkg"
+            R CMD INSTALL "$RUNNER_TEMP/$pkg"
+          done
+
+      # mx.crypto needs a Rust toolchain to build from source, so it is
+      # Linux-only here, off the r2u binary rapt already has sources for.
+      # Its one test -- that matrix_crypto_init() binds the store before
+      # opening the account -- is conditional and does not run on macOS.
+      - name: Install mx.crypto (Linux)
+        if: runner.os == 'Linux'
+        run: Rscript -e 'install.packages("mx.crypto")'
+
+      # Fail loudly rather than letting the suite skip. mx.crypto is
+      # reported but not required, since the macOS leg does without it.
+      - name: Verify Matrix stack
+        run: |
+          Rscript -e '
+            for (p in c("mx.api", "mx.client")) {
+              if (!requireNamespace(p, quietly = TRUE))
+                stop("chat.api CI needs ", p, ": without it ",
+                     "test_matrix_mxclient.R skips itself", call. = FALSE)
+              message(p, " ", as.character(utils::packageVersion(p)))
+            }
+            message("mx.crypto ",
+                    if (requireNamespace("mx.crypto", quietly = TRUE))
+                      as.character(utils::packageVersion("mx.crypto"))
+                    else "absent (crypto-init test will not run)")'
+
       - name: Test
         run: ./run.sh run_tests
