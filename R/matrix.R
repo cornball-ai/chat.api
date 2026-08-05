@@ -120,7 +120,14 @@ chat_matrix <- function(app = NULL, path = NULL, save_cursor = TRUE,
                  "`app` or `crypto_store` too, so the crypto store is ",
                  "unique to this identity.", call. = FALSE)
         }
-        env$crypto <- ops$init(mx, store = crypto_store, app = app)
+        # Interned per identity: rebuilding a client for the same bot
+        # reuses its one Olm account instead of loading a second and
+        # republishing its keys. A consumer that derives a fresh client
+        # per use, so the rotating access token is never cached, still
+        # keeps one crypto identity across the whole run.
+        env$crypto <- matrix_crypto_context(
+            matrix_crypto_cache_key(crypto_store, app),
+            function() ops$init(mx, store = crypto_store, app = app))
     }
     structure(list(env = env, app = app, save_cursor = isTRUE(save_cursor),
                    relogin = isTRUE(relogin), e2ee = isTRUE(e2ee),

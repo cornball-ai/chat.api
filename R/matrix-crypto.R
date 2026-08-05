@@ -27,6 +27,49 @@ matrix_crypto_store <- function(app = NULL) {
     mx.client::mx_crypto_store_dir(app = app %||% "chat.api")
 }
 
+# Crypto contexts already built in this session, keyed per identity.
+#
+# One identity is one Olm account, and building a second client for the
+# same identity must not mint a second context: the account pickle, its
+# published one-time keys, and the Megolm session set are all per-device
+# state, and two contexts writing one store would overwrite each other's
+# pickles.
+#
+# This is what lets a consumer rebuild its client as often as it likes.
+# corteza builds one per use on purpose -- the access token rotates
+# mid-loop, so anything holding a config from before a relogin keeps
+# authenticating with the rejected one -- and interning means that costs
+# an environment lookup rather than an account load and a 50-key upload.
+.crypto_cache <- new.env(parent = emptyenv())
+
+# The identity a store belongs to, as a cache key. Deliberately not the
+# resolved directory: resolving one calls into mx.client, and a .crypto
+# seam exists precisely so the e2ee paths run without it.
+matrix_crypto_cache_key <- function(store = NULL, app = NULL) {
+    store %||% paste0("app:", app %||% "chat.api")
+}
+
+matrix_crypto_context <- function(key, factory) {
+    if (!is.null(.crypto_cache[[key]])) {
+        return(.crypto_cache[[key]])
+    }
+    ctx <- factory()
+    .crypto_cache[[key]] <- ctx
+    ctx
+}
+
+# Drop interned contexts. Tests need it because they build many clients
+# per identity on purpose; nothing in production calls it, since forgetting
+# a context loses the Megolm sessions decrypted since the last save.
+matrix_crypto_forget <- function(key = NULL) {
+    if (is.null(key)) {
+        rm(list = ls(.crypto_cache), envir = .crypto_cache)
+    } else if (!is.null(.crypto_cache[[key]])) {
+        rm(list = key, envir = .crypto_cache)
+    }
+    invisible(NULL)
+}
+
 # The crypto operations the adapter calls, as a replaceable set. Same
 # reason chat_matrix() takes .sync and .extract: the Matrix methods have
 # to be verifiable on a runner with neither mx.client nor a Rust

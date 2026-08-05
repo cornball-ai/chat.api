@@ -477,8 +477,12 @@ local({
 # events reach the caller as ordinary chat_message records.
 
 # A fake crypto context plus ops that record what the adapter asked for.
+# Contexts are interned per identity, so a fresh fake starts by dropping
+# whatever the previous one interned; otherwise every case after the first
+# would silently reuse an earlier fake's context.
 fake_crypto <- function(encrypted_rooms = "!enc:ex", decrypted = list(),
                         event_id = "$enc1", decrypt_error = FALSE) {
+    chat.api:::matrix_crypto_forget()
     log <- new.env(parent = emptyenv())
     log$init <- list()
     log$asked <- character()
@@ -572,6 +576,55 @@ expect_true(is.environment(
                 .extract = function(...) list(),
                 .send = function(...) "$id", .media = function(...) NULL,
                 .crypto = fake_crypto()$ops)$env$crypto))
+
+# ---- One Olm account per identity ----
+# A consumer that derives a fresh client per use -- corteza does, so the
+# rotating access token is never cached -- must not mint a second Olm
+# account each time. Interning is what reconciles a short-lived client
+# with a long-lived crypto identity.
+
+f <- fake_crypto()
+a <- seam_client(e2ee = TRUE, app = "cornelius", .crypto = f$ops)
+b <- seam_client(e2ee = TRUE, app = "cornelius", .crypto = f$ops)
+expect_identical(length(f$log$init), 1L)
+expect_true(identical(a$env$crypto, b$env$crypto))
+
+# Two identities are two contexts. Sharing one would have the second bot
+# come up wearing the first's device keys.
+f <- fake_crypto()
+one <- seam_client(e2ee = TRUE, app = "cornelius", .crypto = f$ops)
+two <- seam_client(e2ee = TRUE, app = "tiny", .crypto = f$ops)
+expect_identical(length(f$log$init), 2L)
+expect_identical(f$log$init[[1L]]$app, "cornelius")
+expect_identical(f$log$init[[2L]]$app, "tiny")
+# The fake returns one shared environment, so identity of the context
+# cannot be the assertion here; that init ran twice is.
+expect_identical(sort(names(f$log$init[[1L]])), c("app", "mx", "store"))
+
+# An explicit crypto_store keys on the store, and the app default keys on
+# the app, so the two never collide.
+f <- fake_crypto()
+seam_client(e2ee = TRUE, crypto_store = "/tmp/store-a", .crypto = f$ops)
+seam_client(e2ee = TRUE, crypto_store = "/tmp/store-a", .crypto = f$ops)
+seam_client(e2ee = TRUE, crypto_store = "/tmp/store-b", .crypto = f$ops)
+expect_identical(length(f$log$init), 2L)
+
+# The cache key is a plain identity string, not a resolved directory:
+# resolving one calls into mx.client, and the seam exists so the e2ee
+# paths run without it.
+expect_identical(chat.api:::matrix_crypto_cache_key(NULL, NULL), "app:chat.api")
+expect_identical(chat.api:::matrix_crypto_cache_key(NULL, "tiny"), "app:tiny")
+expect_identical(chat.api:::matrix_crypto_cache_key("/s", "tiny"), "/s")
+
+# Forgetting one identity leaves the others interned.
+f <- fake_crypto()
+seam_client(e2ee = TRUE, app = "cornelius", .crypto = f$ops)
+seam_client(e2ee = TRUE, app = "tiny", .crypto = f$ops)
+chat.api:::matrix_crypto_forget("app:tiny")
+seam_client(e2ee = TRUE, app = "cornelius", .crypto = f$ops)
+seam_client(e2ee = TRUE, app = "tiny", .crypto = f$ops)
+expect_identical(length(f$log$init), 3L)
+expect_identical(f$log$init[[3L]]$app, "tiny")
 
 # ---- Encrypted sends ----
 
