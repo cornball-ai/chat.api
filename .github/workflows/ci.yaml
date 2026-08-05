@@ -34,8 +34,13 @@ jobs:
       # seam, so nothing in test_matrix.R can reach them. install_deps
       # takes hard dependencies only, so without this they skip
       # themselves into a green check.
+      #
+      # curl and jsonlite come first and explicitly: chat.api has no
+      # dependencies of its own, so install_deps brings in nothing, and
+      # mx.api needs both.
       - name: Install Matrix stack
         run: |
+          Rscript -e 'install.packages(c("curl", "jsonlite"))'
           for pkg in mx.api mx.client; do
             git clone --depth 1 "https://github.com/cornball-ai/$pkg.git" "$RUNNER_TEMP/$pkg"
             R CMD INSTALL "$RUNNER_TEMP/$pkg"
