@@ -56,6 +56,13 @@ jobs:
 
       # Fail loudly rather than letting the suite skip. mx.crypto is
       # reported but not required, since the macOS leg does without it.
+      #
+      # The mx.client floor is enforced, not just declared: the adapter
+      # calls straight into mx_send_encrypted() and cannot work around
+      # what an older one gets wrong. Every step of reading that floor is
+      # checked, because a parse that quietly finds nothing would wave
+      # through exactly what this is here to catch -- which is what the
+      # first version of corteza's equivalent did on macOS.
       - name: Verify Matrix stack
         run: |
           Rscript -e '
@@ -63,8 +70,21 @@ jobs:
               if (!requireNamespace(p, quietly = TRUE))
                 stop("chat.api CI needs ", p, ": without it ",
                      "test_matrix_mxclient.R skips itself", call. = FALSE)
-              message(p, " ", as.character(utils::packageVersion(p)))
             }
+            sug <- read.dcf("DESCRIPTION")[1L, "Suggests"]
+            if (is.na(sug)) stop("no Suggests field in DESCRIPTION")
+            e <- grep("^mx[.]client",
+                      trimws(strsplit(sug, ",")[[1L]]), value = TRUE)
+            if (!length(e)) stop("no mx.client entry in Suggests")
+            m <- regmatches(e, regexpr("[0-9][0-9.-]*", e))
+            if (!length(m)) stop("mx.client Suggests entry declares no floor")
+            floor <- package_version(m)
+            have <- utils::packageVersion("mx.client")
+            message("mx.client ", have, " (>= ", floor, ")")
+            if (have < floor)
+              stop("mx.client ", have, " is below the ", floor,
+                   " chat.api declares", call. = FALSE)
+            message("mx.api ", utils::packageVersion("mx.api"))
             message("mx.crypto ",
                     if (requireNamespace("mx.crypto", quietly = TRUE))
                       as.character(utils::packageVersion("mx.crypto"))
