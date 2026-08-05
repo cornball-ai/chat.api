@@ -33,6 +33,59 @@
 #'   refreshed config lands back in the client, so the next poll and any
 #'   send use the new token. FALSE lets \code{mx_error_M_UNKNOWN_TOKEN}
 #'   propagate.
+#' @param e2ee Logical. Own Olm/Megolm state in the adapter, so
+#'   \code{\link{chat_send}} encrypts for rooms that advertise
+#'   \code{m.room.encryption} and \code{\link{chat_poll}} decrypts
+#'   inbound. FALSE (the default) is the previous behaviour exactly:
+#'   cleartext only, no crypto state, and \code{e2ee} stays FALSE in
+#'   \code{\link{chat_capabilities}}. Requires the 'mx.crypto' package,
+#'   which needs a Rust toolchain, and both \code{user_id} and
+#'   \code{device_id} on the wrapped config.
+#'
+#'   Three things change when it is on. The crypto state is built on
+#'   first use rather than here: from \code{\link{chat_poll}} that means
+#'   key publication happens after the sync, so a relogin has already
+#'   replaced a rejected token, while a \code{\link{chat_send}} that runs
+#'   before any poll publishes with the token it has -- the same exposure
+#'   any direct send already carries, since \code{mx_with_relogin()}
+#'   wraps only the sync. The sync cursor is held back until the crypto
+#'   state is safe, on disk and on the client, so a sync carrying a room
+#'   key is not marked consumed until that key is stored. And attachments
+#'   are refused in encrypted rooms, because Matrix media uploads are not
+#'   encrypted by this adapter -- \code{\link{chat_capabilities}} reports
+#'   \code{files = FALSE} to match.
+#' @param crypto_store Character or NULL. Directory holding the pickled
+#'   Olm account and sessions. NULL derives it from \code{app} via
+#'   \code{mx.client::mx_crypto_store_dir()}, with a per-device
+#'   subdirectory, so moving a config does not cost the device identity
+#'   and two bots under one app namespace do not share an Olm account.
+#'
+#'   A Matrix device has one Olm identity for its whole life, and three
+#'   things hold that. The store records the \code{(user_id, device_id)}
+#'   it belongs to and refuses to open for a different one. Within a
+#'   process, one device gets one context and one store, so pointing a
+#'   second store at it is an error rather than a second account. And on
+#'   first use the account's keys are checked against the ones the
+#'   homeserver already has for that \code{device_id} -- the only one of
+#'   the three that survives a restart, and so the one that catches a
+#'   store swapped between runs. Log in again for a new \code{device_id}
+#'   rather than re-homing an existing one.
+#'
+#'   That last check distinguishes three cases: no published device is a
+#'   first run, a published device whose keys match is this account, and
+#'   a published device that either differs or fails signature
+#'   verification is an error. A \code{/keys/query} that returns a
+#'   \code{failures} map is an error too, since the empty result beside
+#'   it is an unanswered question rather than an absent device. It cannot
+#'   see a homeserver that omits the device deliberately, which is
+#'   indistinguishable from a first run without key pinning or
+#'   cross-signing.
+#'
+#'   A Windows drive-relative \code{crypto_store} (\code{"C:store"}) is
+#'   rejected. It names a directory relative to the current directory of
+#'   that drive, which cannot be read here, so two such paths cannot be
+#'   told apart and two stores could share one context. Pass an absolute
+#'   path.
 #' @param .sync Testing seam: replacement for
 #'   \code{mx.client::mx_sync_update}. Leave NULL in production.
 #' @param .extract Testing seam: replacement for
@@ -48,6 +101,17 @@
 #'   \code{mx.api::mx_typing}. Leave NULL in production. It is resolved
 #'   when \code{chat_typing()} is called, not here, so a NULL seam costs
 #'   nothing on installs without mx.api.
+#' @param .crypto Testing seam: a named list overriding any of the
+#'   adapter's four crypto operations -- \code{init}, \code{encrypted},
+#'   \code{send}, \code{decrypt}. Leave NULL in production. Supplying
+#'   \code{init} is what lets \code{e2ee = TRUE} be tested on a runner
+#'   with neither mx.crypto nor a Rust toolchain; E2EE is the one part of
+#'   this adapter with no honest way to reach a real homeserver from a
+#'   test.
+#' @param .save Testing seam: replacement for
+#'   \code{mx.client::mx_client_save}. Leave NULL in production. Only
+#'   reached on an \code{e2ee} client, which writes the sync cursor after
+#'   the crypto state rather than inside the sync.
 #' @return A \code{chat_client} of class \code{chat_matrix}.
 #'   \code{\link{chat_poll}} on this class returns \code{first_run} and
 #'   \code{client} alongside \code{messages}, \code{cursor}, and
@@ -59,9 +123,10 @@
 #'   poll cycle.
 #' @export
 chat_matrix <- function(app = NULL, path = NULL, save_cursor = TRUE,
-                        mx = NULL, relogin = TRUE, .sync = NULL,
-                        .extract = NULL, .send = NULL, .media = NULL,
-                        .typing = NULL) {
+                        mx = NULL, relogin = TRUE, e2ee = FALSE,
+                        crypto_store = NULL, .sync = NULL, .extract = NULL,
+                        .send = NULL, .media = NULL, .typing = NULL,
+                        .crypto = NULL, .save = NULL) {
     seams <- list(.sync, .extract, .send, .media)
     if ((is.null(mx) || any(vapply(seams, is.null, logical(1)))) &&
         !requireNamespace("mx.client", quietly = TRUE)) {
@@ -78,13 +143,42 @@ chat_matrix <- function(app = NULL, path = NULL, save_cursor = TRUE,
     }
     env <- new.env(parent = emptyenv())
     env$mx <- mx
+    # Crypto state lives on the same env as the client, so a consumer
+    # holds one object and never touches Olm or Megolm itself. NULL when
+    # e2ee is off, which is the default and is exactly the pre-existing
+    # behaviour.
+    # No crypto context yet, even with e2ee on. Initialization publishes
+    # keys, which is an authenticated request, and the stored token may
+    # already be rejected at process start. Doing it here put that upload
+    # ahead of any relogin, so the constructor threw before the poll loop
+    # existed and every restart repeated with the same dead token. It is
+    # built on first use instead, off a config that has just worked. See
+    # matrix_crypto_require().
+    env$crypto <- NULL
+    # The identity check runs now rather than at first use, so a config
+    # that can never key a store fails while the caller is still looking
+    # at the constructor.
+    if (isTRUE(e2ee)) {
+        matrix_crypto_identity(mx)
+    }
     structure(list(env = env, app = app, save_cursor = isTRUE(save_cursor),
-                   relogin = isTRUE(relogin),
+                   relogin = isTRUE(relogin), e2ee = isTRUE(e2ee),
+                   crypto_store = crypto_store,
                    sync_fn = .sync %||% mx.client::mx_sync_update,
                    extract_fn = .extract %||% mx.client::mx_extract_text_events,
                    send_fn = .send %||% mx.client::mx_send_text,
                    media_fn = .media %||% mx.client::mx_send_media,
-                   typing_fn = .typing),
+                   # Left unresolved, like typing_fn. The four seams above
+                   # are only defaulted when their seam is NULL, and R's
+                   # lazy `%||%` never forces the mx.client side when one
+                   # is supplied -- which is what makes the documented
+                   # four-seams-without-mx.client configuration work.
+                   # Defaulting this one here forced mx.client on every
+                   # client, cleartext ones included, and broke exactly
+                   # that configuration. It is resolved where it is used,
+                   # on the deferred-save path, which only e2ee reaches.
+                   save_fn = .save,
+                   typing_fn = .typing, crypto_ops = matrix_crypto_ops(.crypto)),
               class = c("chat_matrix", "chat_client"))
 }
 
@@ -109,6 +203,42 @@ matrix_event_times <- function(sync) {
     out
 }
 
+# Each timeline event's position in the sync, by event id. Walks the same
+# structure matrix_event_times() does, and for the same reason: it is the
+# only place the homeserver's own ordering survives, since the cleartext
+# extractor and the decrypt step each return their own events and neither
+# knows about the other's.
+#
+# Not origin_server_ts. Two events in one room can share a millisecond,
+# and a homeserver's clock is not the ordering the room agreed on.
+matrix_event_order <- function(sync) {
+    out <- list()
+    i <- 0L
+    for (room in sync$rooms$join %||% list()) {
+        for (ev in room$timeline$events %||% list()) {
+            i <- i + 1L
+            if (!is.null(ev$event_id)) {
+                out[[as.character(ev$event_id)]] <- i
+            }
+        }
+    }
+    out
+}
+
+# Sort messages into sync order. Unpositioned events keep their arrival
+# order at the end rather than being dropped or interleaved by guesswork,
+# and the tie-break on index makes the result deterministic either way.
+matrix_order_messages <- function(messages, positions) {
+    if (length(messages) < 2L) {
+        return(messages)
+    }
+    pos <- vapply(messages, function(m) {
+        p <- positions[[as.character(m$id)]]
+        if (is.null(p)) Inf else as.numeric(p)
+    }, numeric(1))
+    messages[order(pos, seq_along(pos))]
+}
+
 # Matrix msgtype -> the contract's kind vocabulary. chat_send maps the
 # same pair in the other direction, so a message that makes a round trip
 # keeps its kind. Leaving m.text on the record would make every Matrix
@@ -129,9 +259,23 @@ chat_poll.chat_matrix <- function(client, since = NULL, timeout = NULL, ...) {
     if (!is.null(since)) {
         client$env$mx$sync_token <- since
     }
+    # With E2EE on the cursor is written after the crypto state, not
+    # inside the sync. mx_sync_update(save = TRUE) commits the advanced
+    # token before anything parses the response, which is what makes a
+    # malformed event survivable -- crash, restart, resume past it. But a
+    # sync carrying a room key is only consumed once that key is on disk,
+    # and a crash between the two loses it permanently: the key is never
+    # re-sent, so every later message in that room is undecryptable.
+    #
+    # So the poison-pill protection is traded for durability, and only on
+    # e2ee clients. What is left in the window is one sync's worth of
+    # replay, which is idempotent -- room keys and Megolm sessions are
+    # keyed by session id.
+    defer_save <- isTRUE(client$e2ee) && isTRUE(client$save_cursor)
     do_sync <- function(mx) {
         client$sync_fn(mx, timeout = as.integer((timeout %||% 0) * 1000),
-                       save = client$save_cursor, app = client$app, ...)
+                       save = isTRUE(client$save_cursor) && !defer_save,
+                       app = client$app, ...)
     }
     # The relogin wrapper hands the retry a re-authenticated config, so
     # the sync has to run off whatever config it is given rather than
@@ -144,9 +288,46 @@ chat_poll.chat_matrix <- function(client, since = NULL, timeout = NULL, ...) {
     } else {
         do_sync(client$env$mx)
     }
-    client$env$mx <- res$client
+    # On an e2ee client the advanced cursor is held back until the crypto
+    # state is safe, in memory as well as on disk. Keeping the cursor off
+    # disk but live on the client only moves the skip: a caller that
+    # catches the decrypt error and polls the same client again resumes
+    # from the token the failed sync produced, and the room keys in it are
+    # gone for good. The refreshed credentials are kept either way -- a
+    # relogin is not what makes a sync consumed.
+    if (isTRUE(client$e2ee)) {
+        held <- res$client
+        held$sync_token <- client$env$mx$sync_token
+        client$env$mx <- held
+    } else {
+        client$env$mx <- res$client
+    }
+
+    # Crypto runs before the cursor is committed and after the sync has
+    # succeeded: after, so a relogin has already replaced a rejected token
+    # and initialization publishes keys with one that works; before, so a
+    # sync whose room keys did not reach disk is not marked consumed.
+    #
+    # Errors propagate. mx.client already skips an individual event it has
+    # no Megolm session for, so a throw here is the other kind of failure
+    # -- to-device processing, or the session save itself -- and swallowing
+    # it while keeping the advanced cursor acknowledged a sync whose keys
+    # were lost.
+    dec <- list()
+    if (isTRUE(client$e2ee)) {
+        crypto <- matrix_crypto_require(client)
+        dec <- client$crypto_ops$decrypt(crypto, res$sync, client$env$mx)
+        if (defer_save) {
+            save_fn <- client$save_fn %||% mx.client::mx_client_save
+            res$client <- save_fn(res$client, app = client$app)
+        }
+        # Nothing above threw, so the sync is consumed and its cursor
+        # becomes the live one.
+        client$env$mx <- res$client
+    }
 
     event_ts <- matrix_event_times(res$sync)
+    event_pos <- matrix_event_order(res$sync)
     recs <- client$extract_fn(res$sync, self_id = res$client$user_id)
     messages <- lapply(recs, function(r) {
         # ts is the event's own origin_server_ts, from the record when
@@ -169,6 +350,34 @@ chat_poll.chat_matrix <- function(client, since = NULL, timeout = NULL, ...) {
                      mentions = unlist(r$mentions, use.names = FALSE),
                      raw = r)
     })
+    # Decrypted traffic folds in alongside the cleartext, in the same
+    # chat_message shape, so a consumer cannot tell which arrived
+    # encrypted except by reading $encrypted. That is the whole point of
+    # owning crypto here: corteza used to run its own decrypt off $raw and
+    # concatenate the results itself.
+    for (d in dec) {
+        ms <- d$ts %||% event_ts[[as.character(d$event_id)]]
+        messages[[length(messages) + 1L]] <- chat_message(
+            id = as.character(d$event_id),
+            channel = as.character(d$room_id),
+            sender = as.character(d$sender),
+            body = as.character(d$body),
+            ts = if (is.null(ms)) as.POSIXct(NA) else
+            as.POSIXct(ms / 1000, origin = "1970-01-01"),
+            markup = "plain", kind = matrix_kind(d$msgtype),
+            self = isTRUE(d$is_self),
+            mentions = unlist(d$mentions, use.names = FALSE),
+            encrypted = TRUE,
+            sender_verified = isTRUE(d$sender_verified),
+            raw = d)
+    }
+    # Back into the order the homeserver sent them. Appending the
+    # decrypted events put every one of them after every cleartext one,
+    # so an encrypted message followed by a plain reply came out
+    # backwards -- which reorders a room's commands against the messages
+    # they act on. Anything the sync did not position sorts last, in the
+    # order it arrived.
+    messages <- matrix_order_messages(messages, event_pos)
     # first_run says the sync ran without a stored cursor, so these
     # messages are the homeserver's backfill baseline, not new traffic.
     # A consumer that drops it replays its whole history as fresh mail
@@ -180,8 +389,8 @@ chat_poll.chat_matrix <- function(client, since = NULL, timeout = NULL, ...) {
     # with the token the homeserver just rejected.
     #
     # raw carries the full sync response for Matrix-specific consumers
-    # (invites, reactions, E2EE decryption) that the generic contract
-    # does not model yet
+    # (invites, reactions) that the generic contract does not model yet.
+    # E2EE no longer needs it.
     list(messages = messages, cursor = res$client$sync_token,
          first_run = isTRUE(res$first_run), client = res$client,
          raw = res$sync)
@@ -194,6 +403,25 @@ chat_send.chat_matrix <- function(client, channel, text,
                                   identity = NULL, files = NULL,
                                   kind = "message", notify = TRUE, ...) {
     markup <- match.arg(markup)
+    # Resolved before anything is uploaded or posted. The encryption
+    # question used to be asked after the attachment loop had already run,
+    # which put the files on the homeserver in the clear before the text
+    # took the Megolm path -- and an attachment-only send never asked at
+    # all.
+    crypto <- matrix_crypto_require(client)
+    encrypted <- !is.null(crypto) &&
+    client$crypto_ops$encrypted(crypto, client$env$mx, channel)
+    if (encrypted && !is.null(files)) {
+        # mx_send_media() posts an ordinary cleartext m.file event: the
+        # upload is not encrypted, and neither is the URL. There is no
+        # encrypted-attachment path to fall back to, so this refuses
+        # rather than leaking. chat_capabilities()$files reports FALSE on
+        # an e2ee client for the same reason.
+        stop("chat.api: cannot send attachments to the encrypted room ",
+             channel, ". Matrix media uploads are not encrypted by this ",
+             "adapter, and posting them would put the file on the ",
+             "homeserver in the clear.", call. = FALSE)
+    }
     media_ids <- character()
     if (!is.null(files)) {
         for (f in files) {
@@ -217,6 +445,17 @@ chat_send.chat_matrix <- function(client, channel, text,
     # attachment's echo as somebody else's message: corteza recognizes
     # its own traffic by event id.
     if (!length(media_ids) || any(nzchar(text))) {
+        # markup and mentions carry through: the encrypted branch builds
+        # the same m.room.message content the cleartext one does, so a
+        # markdown send renders the same either way. Only the envelope
+        # differs.
+        if (encrypted) {
+            event <- client$crypto_ops$send(crypto, client$env$mx, channel,
+                text, msgtype = msgtype,
+                markdown = identical(markup, "markdown"),
+                mentions = list(...)$mentions)
+            return(invisible(c(media_ids, as.character(event))))
+        }
         event <- client$send_fn(client$env$mx, text, room = channel,
                                 msgtype = msgtype,
                                 markdown = identical(markup, "markdown"), ...)
@@ -275,16 +514,24 @@ chat_capabilities.chat_matrix <- function(client, ...) {
     # and mx_extract_text_events filters to m.text, so an m.reaction can
     # be neither sent nor received here.
     #
-    # e2ee is FALSE because chat_send goes through mx_send_text, which
-    # PUTs a cleartext m.room.message no matter what the room's
-    # encryption state says, and chat_poll never sees an
-    # m.room.encrypted event. Reporting TRUE off an installed mx.crypto
-    # invites a consumer to hand this adapter a secret for an encrypted
-    # room and have it land on the homeserver in the clear. Flip it when
-    # the adapter routes through mx_send_encrypted and decrypts inbound.
+    # e2ee answers for this client, not for Matrix and not for the
+    # installed packages: it is TRUE when this client was built with
+    # e2ee = TRUE, which is what routes sends through mx_send_encrypted
+    # and decrypts inbound. Reporting TRUE off an installed mx.crypto
+    # would invite a consumer to hand a secret to a client that PUTs it in
+    # the clear. It reads the setting rather than the crypto context
+    # because the context is built on first use, and a capability that
+    # flipped after the first poll would be worse than either answer.
+    #
+    # files is FALSE on an e2ee client. mx_send_media() posts a cleartext
+    # m.file event whatever the room's encryption state says, and this
+    # adapter has no encrypted-attachment path, so chat_send() refuses
+    # attachments to an encrypted room. TRUE would advertise something
+    # that fails in exactly the rooms such a client exists for.
     list(threads = FALSE, thread_replies = FALSE, edits = FALSE,
-         reactions = FALSE, files = TRUE, typing = TRUE, e2ee = FALSE,
-         identity_override = FALSE, markup_dialects = c("plain", "markdown"),
+         reactions = FALSE, files = !isTRUE(client$e2ee), typing = TRUE,
+         e2ee = isTRUE(client$e2ee), identity_override = FALSE,
+         markup_dialects = c("plain", "markdown"),
          max_message_bytes = NA_integer_)
 }
 

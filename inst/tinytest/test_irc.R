@@ -2,6 +2,13 @@
 # (serverSocket + socketAccept, R >= 4.0). Skips where binding a
 # localhost port is not permitted.
 
+# Defined before its first use, and defined at all. Base R only grew
+# `%||%` in 4.4.0, so the line below used to borrow base's silently: fine
+# on the R this usually runs against, an error on the R 4.0 this package
+# claims to support, and the Ubuntu runner picked distro R 4.3.3 one day
+# and said so.
+`%||%` <- function(a, b) if (is.null(a)) b else a
+
 ss <- tryCatch(serverSocket(0L), error = function(e) NULL)
 if (!is.null(ss)) {
     port <- summary(ss)$port %||% NULL
@@ -13,8 +20,6 @@ if (!is.null(ss)) {
         port <- 48123L
     }
 }
-
-`%||%` <- function(a, b) if (is.null(a)) b else a
 
 if (!is.null(ss)) {
     cl <- chat_irc("127.0.0.1", port, nick = "testbot", channels = "#lab")

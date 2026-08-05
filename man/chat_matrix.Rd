@@ -3,9 +3,22 @@
 \alias{chat_matrix}
 \title{Create a Matrix chat client}
 \usage{
-chat_matrix(app = NULL, path = NULL, save_cursor = TRUE, mx = NULL,
-            relogin = TRUE, .sync = NULL, .extract = NULL, .send = NULL,
-            .media = NULL, .typing = NULL)
+chat_matrix(
+  app = NULL,
+  path = NULL,
+  save_cursor = TRUE,
+  mx = NULL,
+  relogin = TRUE,
+  e2ee = FALSE,
+  crypto_store = NULL,
+  .sync = NULL,
+  .extract = NULL,
+  .send = NULL,
+  .media = NULL,
+  .typing = NULL,
+  .crypto = NULL,
+  .save = NULL
+)
 }
 \arguments{
 \item{app}{Application namespace passed to
@@ -37,6 +50,61 @@ refreshed config lands back in the client, so the next poll and any
 send use the new token. FALSE lets \code{mx_error_M_UNKNOWN_TOKEN}
 propagate.}
 
+\item{e2ee}{Logical. Own Olm/Megolm state in the adapter, so
+\code{\link{chat_send}} encrypts for rooms that advertise
+\code{m.room.encryption} and \code{\link{chat_poll}} decrypts
+inbound. FALSE (the default) is the previous behaviour exactly:
+cleartext only, no crypto state, and \code{e2ee} stays FALSE in
+\code{\link{chat_capabilities}}. Requires the 'mx.crypto' package,
+which needs a Rust toolchain, and both \code{user_id} and
+\code{device_id} on the wrapped config.
+
+Three things change when it is on. The crypto state is built on
+first use rather than here: from \code{\link{chat_poll}} that means
+key publication happens after the sync, so a relogin has already
+replaced a rejected token, while a \code{\link{chat_send}} that runs
+before any poll publishes with the token it has -- the same exposure
+any direct send already carries, since \code{mx_with_relogin()}
+wraps only the sync. The sync cursor is held back until the crypto
+state is safe, on disk and on the client, so a sync carrying a room
+key is not marked consumed until that key is stored. And attachments
+are refused in encrypted rooms, because Matrix media uploads are not
+encrypted by this adapter -- \code{\link{chat_capabilities}} reports
+\code{files = FALSE} to match.}
+
+\item{crypto_store}{Character or NULL. Directory holding the pickled
+Olm account and sessions. NULL derives it from \code{app} via
+\code{mx.client::mx_crypto_store_dir()}, with a per-device
+subdirectory, so moving a config does not cost the device identity
+and two bots under one app namespace do not share an Olm account.
+
+A Matrix device has one Olm identity for its whole life, and three
+things hold that. The store records the \code{(user_id, device_id)}
+it belongs to and refuses to open for a different one. Within a
+process, one device gets one context and one store, so pointing a
+second store at it is an error rather than a second account. And on
+first use the account's keys are checked against the ones the
+homeserver already has for that \code{device_id} -- the only one of
+the three that survives a restart, and so the one that catches a
+store swapped between runs. Log in again for a new \code{device_id}
+rather than re-homing an existing one.
+
+That last check distinguishes three cases: no published device is a
+first run, a published device whose keys match is this account, and
+a published device that either differs or fails signature
+verification is an error. A \code{/keys/query} that returns a
+\code{failures} map is an error too, since the empty result beside
+it is an unanswered question rather than an absent device. It cannot
+see a homeserver that omits the device deliberately, which is
+indistinguishable from a first run without key pinning or
+cross-signing.
+
+A Windows drive-relative \code{crypto_store} (\code{"C:store"}) is
+rejected. It names a directory relative to the current directory of
+that drive, which cannot be read here, so two such paths cannot be
+told apart and two stores could share one context. Pass an absolute
+path.}
+
 \item{.sync}{Testing seam: replacement for
 \code{mx.client::mx_sync_update}. Leave NULL in production.}
 
@@ -56,6 +124,19 @@ without mx.client installed; \code{chat_typing()} and
 \code{mx.api::mx_typing}. Leave NULL in production. It is resolved
 when \code{chat_typing()} is called, not here, so a NULL seam costs
 nothing on installs without mx.api.}
+
+\item{.crypto}{Testing seam: a named list overriding any of the
+adapter's four crypto operations -- \code{init}, \code{encrypted},
+\code{send}, \code{decrypt}. Leave NULL in production. Supplying
+\code{init} is what lets \code{e2ee = TRUE} be tested on a runner
+with neither mx.crypto nor a Rust toolchain; E2EE is the one part of
+this adapter with no honest way to reach a real homeserver from a
+test.}
+
+\item{.save}{Testing seam: replacement for
+\code{mx.client::mx_client_save}. Leave NULL in production. Only
+reached on an \code{e2ee} client, which writes the sync cursor after
+the crypto state rather than inside the sync.}
 }
 \value{
 A \code{chat_client} of class \code{chat_matrix}.
