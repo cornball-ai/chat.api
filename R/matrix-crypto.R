@@ -107,21 +107,58 @@ matrix_crypto_cache_key <- function(mx) {
     paste(id[["user_id"]], id[["device_id"]], sep = "\n")
 }
 
-# A store request, normalized enough that two spellings of one directory
-# are one request. NULL means "derive the default", which is itself a
-# stable request: two clients that both defer resolve the same way.
-#
-# Trailing separators are stripped by hand because normalizePath() leaves
-# a path that does not exist yet exactly as given -- and a store's first
-# use is precisely when it does not exist. For one that does, it also
-# resolves `..` and symlinks, so two routes to one directory collapse.
+# A store request, normalized so two spellings of one directory are one
+# request. NULL means "derive the default", which is itself a stable
+# request: two clients that both defer resolve the same way.
 matrix_crypto_store_spec <- function(store = NULL, app = NULL) {
     if (is.null(store)) {
         return(paste0("app:", app %||% "chat.api"))
     }
-    p <- path.expand(store)
-    trimmed <- sub("(.)/+$", "\\1", p)
-    normalizePath(trimmed, mustWork = FALSE)
+    matrix_normalize_path(store)
+}
+
+# Lexical path normalization: expand ~, make it absolute, fold separators,
+# and resolve . and .. by hand.
+#
+# Deliberately not normalizePath(). That resolves symlinks, which this
+# does not, but it returns a path that does not exist yet exactly as
+# given -- and a store's first use is exactly when it does not exist. Two
+# calls for one directory would then disagree depending on whether it had
+# been created between them, which is worse than not resolving symlinks
+# at all: the comparison this feeds has to be stable over the store's
+# whole life, not accurate at one moment of it.
+#
+# The trailing-separator strip this replaces also ate the slash off a
+# Windows drive root, turning "C:/" into "C:".
+matrix_normalize_path <- function(p) {
+    p <- gsub("\\\\", "/", path.expand(p))
+    root <- ""
+    if (grepl("^[A-Za-z]:/", p)) {
+        root <- substr(p, 1L, 3L)
+        p <- substring(p, 4L)
+    } else if (startsWith(p, "/")) {
+        root <- "/"
+        p <- substring(p, 2L)
+    } else {
+        # Relative to wherever the caller stood. Two callers in different
+        # directories mean two stores, and saying so beats merging them.
+        return(matrix_normalize_path(file.path(gsub("\\\\", "/", getwd()), p)))
+    }
+    out <- character()
+    for (part in strsplit(p, "/")[[1L]]) {
+        if (!nzchar(part) || identical(part, ".")) {
+            next
+        }
+        if (identical(part, "..")) {
+            if (length(out)) {
+                out <- out[-length(out)]
+            }
+            # Above the root there is nothing to go up to; drop it.
+            next
+        }
+        out <- c(out, part)
+    }
+    paste0(root, paste(out, collapse = "/"))
 }
 
 # One identity, one context, one store. A second store for a device
@@ -209,6 +246,51 @@ matrix_crypto_ops <- function(override = NULL) {
     ops
 }
 
+# Does this account hold the keys the homeserver already has for this
+# device? Matrix gives a device_id one ed25519 and one curve25519 for its
+# whole life, and the homeserver is the authority on which.
+#
+# The in-process cache cannot answer this. It stops two contexts existing
+# at once, and nothing more: restart the process, or call
+# matrix_crypto_forget(), and a changed crypto_store mints a fresh
+# account that would go on to publish different long-lived keys under the
+# old device_id. So "re-homing needs a new device_id" was commentary. This
+# is the enforcement, and it is durable because the record it checks
+# against lives on the server rather than in this session.
+#
+# A device the server has never seen is the first-run case and proceeds.
+# A query that cannot be answered is an error: init is about to publish
+# keys to that same homeserver, so it is not a host we can be off-line
+# from, and the caller retries on the next poll.
+matrix_crypto_check_published <- function(mx, acct) {
+    mine <- mx.crypto::mxc_account_identity_keys(acct)
+    devs <- tryCatch(mx.client::mx_crypto_known_devices(mx, mx$user_id),
+                     error = function(e) {
+        stop("chat.api: cannot read this device's published keys from the ",
+             "homeserver (", conditionMessage(e), "). Refusing to publish ",
+             "an Olm identity that may conflict with one already there.",
+             call. = FALSE)
+    })
+    for (d in devs) {
+        if (!identical(d$device_id, mx$device_id)) {
+            next
+        }
+        if (identical(d$ed25519, mine$ed25519) &&
+            identical(d$curve25519, mine$curve25519)) {
+            return(invisible(TRUE))
+        }
+        stop("chat.api: the homeserver already has different device keys ",
+             "for ", mx$user_id, "/", mx$device_id, " (ed25519 ",
+             substr(d$ed25519 %||% "", 1L, 12L), "..., this store has ",
+             substr(mine$ed25519 %||% "", 1L, 12L),
+             "...). This store holds another device's Olm account, or the ",
+             "one this device used has been lost. A device has one identity ",
+             "for its lifetime, so log in again for a new device_id rather ",
+             "than republishing under this one.", call. = FALSE)
+    }
+    invisible(TRUE)
+}
+
 # Load or create the account, publish keys, restore sessions and the
 # known-encrypted-room set. Returns an environment: the poll loop mutates
 # sessions in place, and callers hold the same object across polls.
@@ -225,6 +307,7 @@ matrix_crypto_init <- function(mx, store = NULL, app = NULL) {
     store <- store %||% matrix_crypto_store(mx, app = app)
     matrix_crypto_bind_identity(store, mx)
     acct <- mx.client::mx_crypto_account(store)
+    matrix_crypto_check_published(mx, acct)
     mx.client::mx_crypto_publish_keys(mx, acct, store, n_otks = 50L)
     crypto <- new.env(parent = emptyenv())
     crypto$account <- acct

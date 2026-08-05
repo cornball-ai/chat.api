@@ -653,15 +653,42 @@ spec <- chat.api:::matrix_crypto_store_spec
 expect_identical(spec("/tmp/store-a"), spec("/tmp/store-a/"))
 expect_identical(spec("/tmp/store-a"), spec("/tmp/store-a///"))
 expect_false(identical(spec("/tmp/store-a"), spec("/tmp/store-b")))
-# Root survives the trailing-slash strip rather than becoming "".
-expect_true(nzchar(spec("/")))
-# For a directory that exists, `..` and symlinks collapse too.
+
+# Dot segments fold whether or not the directory exists. normalizePath()
+# only folds them for a path that does, and a store's first use is
+# exactly when it does not -- so two calls for one directory would have
+# disagreed depending on whether it had been created in between.
+n <- chat.api:::matrix_normalize_path
+expect_identical(n("/missing/a/../b"), n("/missing/b"))
+expect_identical(n("/missing/./b"), n("/missing/b"))
+expect_identical(n("/missing/a/b/../.."), n("/missing"))
+# Roots survive, including a Windows drive root -- the trailing-slash
+# strip this replaced turned "C:/" into "C:".
+expect_identical(n("/"), "/")
+expect_identical(n("C:/"), "C:/")
+expect_identical(n("C:/x/../y"), "C:/y")
+expect_identical(n("C:\\x\\y"), "C:/x/y")
+# There is nothing above a root to climb to.
+expect_identical(n("/../x"), "/x")
+# ~ expands, and a relative path resolves against the caller's directory
+# rather than merging with an unrelated one of the same name.
+expect_true(startsWith(n("~/x"), "/"))
+expect_identical(n("rel/x"), n(file.path(getwd(), "rel/x")))
+expect_true(startsWith(n("rel/x"), "/"))
+# Directories that do exist still fold, which is the common case.
 local({
     d <- file.path(tempfile("specdir"), "s")
     dir.create(d, recursive = TRUE)
     on.exit(unlink(dirname(d), recursive = TRUE))
     expect_identical(spec(d), spec(file.path(dirname(d), "..",
                                              basename(dirname(d)), "s")))
+    # ... and the same path gives the same spec before and after it
+    # exists, which is the property the whole comparison rests on.
+    gone <- file.path(tempfile("specgone"), "s")
+    before <- spec(gone)
+    dir.create(gone, recursive = TRUE)
+    on.exit(unlink(dirname(gone), recursive = TRUE), add = TRUE)
+    expect_identical(before, spec(gone))
 })
 # A deferred store is a stable request too: two clients that both defer
 # resolve the same way, and the app is what distinguishes them.

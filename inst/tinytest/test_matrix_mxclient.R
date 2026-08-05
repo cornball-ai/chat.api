@@ -469,12 +469,17 @@ if (requireNamespace("mx.crypto", quietly = TRUE)) {
         o5 <- stub("mxc_account_identity_keys",
                    function(...) list(curve25519 = "C", ed25519 = "E"),
                    "mx.crypto")
+        # A homeserver that has never seen this device. The published-key
+        # check is exercised on its own further down.
+        o6 <- stub("mx_crypto_known_devices", function(...) list(),
+                   "mx.client")
         on.exit({
             assignInNamespace("mx_crypto_account", o1, ns = "mx.client")
             assignInNamespace("mx_crypto_publish_keys", o2, ns = "mx.client")
             assignInNamespace("mx_crypto_sessions_load", o3, ns = "mx.client")
             assignInNamespace("mx_client_session", o4, ns = "mx.client")
             assignInNamespace("mxc_account_identity_keys", o5, ns = "mx.crypto")
+            assignInNamespace("mx_crypto_known_devices", o6, ns = "mx.client")
         })
 
         store <- tempfile("initstore")
@@ -520,3 +525,124 @@ local({
     expect_true(startsWith(chat.api:::matrix_crypto_store(one, app = "t"),
                            mx.client::mx_crypto_store_dir(app = "t")))
 })
+
+# ---- One identity per device, durably ----
+# The in-process cache stops two contexts existing at once and nothing
+# more: restart, or matrix_crypto_forget(), and a changed crypto_store
+# would mint a fresh account and publish different long-lived keys under
+# the old device_id. The homeserver is the authority on which keys a
+# device has, so that is what init checks against.
+if (requireNamespace("mx.crypto", quietly = TRUE)) {
+    init_stubs <- function(known, ...) {
+        o <- list(
+            mx_crypto_account = stub("mx_crypto_account", function(...) "acct",
+                                     "mx.client"),
+            mx_crypto_publish_keys = stub("mx_crypto_publish_keys",
+                                          function(...) invisible(TRUE),
+                                          "mx.client"),
+            mx_crypto_sessions_load = stub("mx_crypto_sessions_load",
+                                           function(...) list(), "mx.client"),
+            mx_client_session = stub("mx_client_session",
+                                     function(...) stop("offline"),
+                                     "mx.client"),
+            mx_crypto_known_devices = stub("mx_crypto_known_devices", known,
+                                           "mx.client"),
+            mxc_account_identity_keys = stub(
+                "mxc_account_identity_keys",
+                function(...) list(curve25519 = "CURVE-ours",
+                                   ed25519 = "ED-ours"), "mx.crypto"))
+        o
+    }
+    restore_stubs <- function(o) {
+        for (nm in names(o)) {
+            ns <- if (nm == "mxc_account_identity_keys") "mx.crypto" else
+                "mx.client"
+            assignInNamespace(nm, o[[nm]], ns = ns)
+        }
+    }
+    me <- list(user_id = "@a:ex", device_id = "D1", token = "t",
+               server = "https://ex.invalid")
+
+    # A device the homeserver has never seen is the first run.
+    local({
+        published <- NULL
+        o <- init_stubs(function(client, user_ids) {
+            published <<- user_ids
+            list()
+        })
+        on.exit(restore_stubs(o))
+        store <- tempfile("pub1")
+        expect_true(is.environment(chat.api:::matrix_crypto_init(me,
+                                                                 store = store)))
+        # It asks about its own user, not the room's members.
+        expect_identical(published, "@a:ex")
+        unlink(store, recursive = TRUE)
+    })
+
+    # Keys that match are this device's own account: proceed.
+    local({
+        o <- init_stubs(function(...) list(
+            list(user_id = "@a:ex", device_id = "D1",
+                 curve25519 = "CURVE-ours", ed25519 = "ED-ours")))
+        on.exit(restore_stubs(o))
+        store <- tempfile("pub2")
+        expect_true(is.environment(chat.api:::matrix_crypto_init(me,
+                                                                 store = store)))
+        unlink(store, recursive = TRUE)
+    })
+
+    # Keys that differ mean this store is not this device's. This is the
+    # case a restart plus a changed crypto_store produced, which nothing
+    # in the process cache could have seen.
+    local({
+        o <- init_stubs(function(...) list(
+            list(user_id = "@a:ex", device_id = "D1",
+                 curve25519 = "CURVE-theirs", ed25519 = "ED-theirs")))
+        on.exit(restore_stubs(o))
+        store <- tempfile("pub3")
+        expect_error(chat.api:::matrix_crypto_init(me, store = store),
+                     "already has different device keys")
+        unlink(store, recursive = TRUE)
+    })
+
+    # Another device of the same user is not this device, and does not
+    # collide with it.
+    local({
+        o <- init_stubs(function(...) list(
+            list(user_id = "@a:ex", device_id = "D2",
+                 curve25519 = "CURVE-other", ed25519 = "ED-other")))
+        on.exit(restore_stubs(o))
+        store <- tempfile("pub4")
+        expect_true(is.environment(chat.api:::matrix_crypto_init(me,
+                                                                 store = store)))
+        unlink(store, recursive = TRUE)
+    })
+
+    # A query that cannot be answered is an error, not a shrug. init is
+    # about to publish keys to that same homeserver, so being unable to
+    # ask it anything is not a state to publish from.
+    local({
+        o <- init_stubs(function(...) stop("504 from homeserver"))
+        on.exit(restore_stubs(o))
+        store <- tempfile("pub5")
+        expect_error(chat.api:::matrix_crypto_init(me, store = store),
+                     "cannot read this device's published keys")
+        unlink(store, recursive = TRUE)
+    })
+
+    # The check runs before the upload, so a mismatch never publishes.
+    local({
+        uploads <- 0L
+        o <- init_stubs(function(...) list(
+            list(user_id = "@a:ex", device_id = "D1",
+                 curve25519 = "CURVE-theirs", ed25519 = "ED-theirs")))
+        assignInNamespace("mx_crypto_publish_keys",
+                          function(...) { uploads <<- uploads + 1L
+                                          invisible(TRUE) }, ns = "mx.client")
+        on.exit(restore_stubs(o))
+        store <- tempfile("pub6")
+        expect_error(chat.api:::matrix_crypto_init(me, store = store))
+        expect_identical(uploads, 0L)
+        unlink(store, recursive = TRUE)
+    })
+}

@@ -77,8 +77,17 @@ Olm account and sessions. NULL derives it from \code{app} via
 \code{mx.client::mx_crypto_store_dir()}, with a per-device
 subdirectory, so moving a config does not cost the device identity
 and two bots under one app namespace do not share an Olm account.
-Either way the store records the \code{(user_id, device_id)} it
-belongs to and refuses to open for a different one.}
+
+A Matrix device has one Olm identity for its whole life, and three
+things hold that. The store records the \code{(user_id, device_id)}
+it belongs to and refuses to open for a different one. Within a
+process, one device gets one context and one store, so pointing a
+second store at it is an error rather than a second account. And on
+first use the account's keys are checked against the ones the
+homeserver already has for that \code{device_id} -- which is the
+only one of the three that survives a restart, and so the one that
+catches a store swapped between runs. Log in again for a new
+\code{device_id} rather than re-homing an existing one.}
 
 \item{.sync}{Testing seam: replacement for
 \code{mx.client::mx_sync_update}. Leave NULL in production.}
