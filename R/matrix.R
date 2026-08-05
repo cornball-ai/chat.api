@@ -82,9 +82,9 @@
 #' @export
 chat_matrix <- function(app = NULL, path = NULL, save_cursor = TRUE,
                         mx = NULL, relogin = TRUE, e2ee = FALSE,
-                        crypto_store = NULL, .sync = NULL,
-                        .extract = NULL, .send = NULL, .media = NULL,
-                        .typing = NULL, .crypto = NULL) {
+                        crypto_store = NULL, .sync = NULL, .extract = NULL,
+                        .send = NULL, .media = NULL, .typing = NULL,
+                        .crypto = NULL) {
     seams <- list(.sync, .extract, .send, .media)
     if ((is.null(mx) || any(vapply(seams, is.null, logical(1)))) &&
         !requireNamespace("mx.client", quietly = TRUE)) {
@@ -220,13 +220,13 @@ chat_poll.chat_matrix <- function(client, since = NULL, timeout = NULL, ...) {
     # concatenate the results itself.
     if (!is.null(client$env$crypto)) {
         dec <- tryCatch(
-            client$crypto_ops$decrypt(client$env$crypto, res$sync,
-                                      client$env$mx),
-            error = function(e) {
-                warning("chat.api: decrypt failed: ", conditionMessage(e),
-                        call. = FALSE)
-                list()
-            })
+                        client$crypto_ops$decrypt(client$env$crypto, res$sync,
+                client$env$mx),
+                        error = function(e) {
+            warning("chat.api: decrypt failed: ", conditionMessage(e),
+                    call. = FALSE)
+            list()
+        })
         for (d in dec) {
             ms <- d$ts %||% event_ts[[as.character(d$event_id)]]
             messages[[length(messages) + 1L]] <- chat_message(
@@ -235,7 +235,7 @@ chat_poll.chat_matrix <- function(client, since = NULL, timeout = NULL, ...) {
                 sender = as.character(d$sender),
                 body = as.character(d$body),
                 ts = if (is.null(ms)) as.POSIXct(NA) else
-                    as.POSIXct(ms / 1000, origin = "1970-01-01"),
+                as.POSIXct(ms / 1000, origin = "1970-01-01"),
                 markup = "plain", kind = matrix_kind(d$msgtype),
                 self = isTRUE(d$is_self),
                 mentions = unlist(d$mentions, use.names = FALSE),
@@ -303,9 +303,9 @@ chat_send.chat_matrix <- function(client, channel, text,
         # markdown send renders the same either way. Only the envelope
         # differs.
         if (!is.null(crypto) &&
-                client$crypto_ops$encrypted(crypto, client$env$mx, channel)) {
-            event <- client$crypto_ops$send(
-                crypto, client$env$mx, channel, text, msgtype = msgtype,
+            client$crypto_ops$encrypted(crypto, client$env$mx, channel)) {
+            event <- client$crypto_ops$send(crypto, client$env$mx, channel,
+                text, msgtype = msgtype,
                 markdown = identical(markup, "markdown"),
                 mentions = list(...)$mentions)
             return(invisible(c(media_ids, as.character(event))))
@@ -376,8 +376,8 @@ chat_capabilities.chat_matrix <- function(client, ...) {
     # client that PUTs it on the homeserver in the clear.
     list(threads = FALSE, thread_replies = FALSE, edits = FALSE,
          reactions = FALSE, files = TRUE, typing = TRUE,
-         e2ee = !is.null(client$env$crypto),
-         identity_override = FALSE, markup_dialects = c("plain", "markdown"),
+         e2ee = !is.null(client$env$crypto), identity_override = FALSE,
+         markup_dialects = c("plain", "markdown"),
          max_message_bytes = NA_integer_)
 }
 

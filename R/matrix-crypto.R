@@ -35,8 +35,7 @@ matrix_crypto_store <- function(app = NULL) {
 matrix_crypto_ops <- function(override = NULL) {
     ops <- list(init = matrix_crypto_init,
                 encrypted = matrix_room_is_encrypted,
-                send = matrix_crypto_send,
-                decrypt = matrix_crypto_decrypt)
+                send = matrix_crypto_send, decrypt = matrix_crypto_decrypt)
     for (nm in names(override)) {
         ops[[nm]] <- override[[nm]]
     }
@@ -68,7 +67,7 @@ matrix_crypto_init <- function(mx, store = NULL, app = NULL) {
     crypto$sessions <- mx.client::mx_crypto_sessions_load(store)
     crypto$encrypted <- matrix_crypto_load_encrypted(store)
     crypto$self_curve <-
-        mx.crypto::mxc_account_identity_keys(acct)$curve25519
+    mx.crypto::mxc_account_identity_keys(acct)$curve25519
     # Ask each joined room for its encryption state up front rather than
     # waiting for a sync to mention it. Best-effort per room; a transient
     # failure defers that room to sync-time detection.
@@ -176,8 +175,7 @@ matrix_encrypted_senders <- function(sync) {
     out <- character()
     for (room in sync$rooms$join %||% list()) {
         for (ev in room$timeline$events %||% list()) {
-            if (isTRUE(ev$type == "m.room.encrypted") &&
-                    !is.null(ev$sender)) {
+            if (isTRUE(ev$type == "m.room.encrypted") && !is.null(ev$sender)) {
                 out <- c(out, ev$sender)
             }
         }
@@ -240,14 +238,14 @@ matrix_crypto_send <- function(crypto, mx, room_id, text, msgtype = "m.text",
     content <- matrix_crypto_content(text, msgtype = msgtype,
                                      markdown = markdown, mentions = mentions)
     res <- tryCatch(
-        mx.client::mx_send_encrypted(mx, crypto$account, crypto$sessions,
-                                     room_id, content, crypto$store,
-                                     member_ids = members),
-        error = function(e) {
-            warning("chat.api: encrypted send failed: ", conditionMessage(e),
-                    call. = FALSE)
-            NULL
-        })
+                    mx.client::mx_send_encrypted(mx, crypto$account, crypto$sessions,
+            room_id, content, crypto$store,
+            member_ids = members),
+                    error = function(e) {
+        warning("chat.api: encrypted send failed: ", conditionMessage(e),
+                call. = FALSE)
+        NULL
+    })
     if (is.null(res)) {
         return(NULL)
     }
