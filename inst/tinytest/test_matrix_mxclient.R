@@ -553,10 +553,16 @@ if (requireNamespace("mx.crypto", quietly = TRUE)) {
                                      function(...) list(server = "s"),
                                      "mx.client"),
             mx_keys_query = stub("mx_keys_query", query, "mx.api"),
+            # Spelled out rather than `verify %||% default`: base R has
+            # no %||% before 4.4, and this package supports R 4.0.
             mxc_verify_device_keys = stub(
                 "mxc_verify_device_keys",
-                verify %||% function(...) list(curve25519 = "CURVE-ours",
-                                               ed25519 = "ED-ours"),
+                if (is.null(verify)) {
+                    function(...) list(curve25519 = "CURVE-ours",
+                                       ed25519 = "ED-ours")
+                } else {
+                    verify
+                },
                 "mx.crypto"),
             mxc_account_identity_keys = stub(
                 "mxc_account_identity_keys",
