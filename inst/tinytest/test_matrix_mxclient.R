@@ -263,3 +263,236 @@ boom <- chat_matrix(mx = list(user_id = "@bot:ex",
                     .send = fake_send, .media = fake_media,
                     .typing = function(...) stop("homeserver down"))
 expect_false(chat_typing(boom, "!room:ex"))
+
+# ---- The real crypto boundary functions ----
+# These sit behind chat_matrix()'s .crypto seam, so the adapter-routing
+# tests in test_matrix.R never reach them. Their failure modes are the
+# two that leak, so they are driven directly here against stubbed
+# mx.client / mx.api entry points.
+
+crypto_ctx <- function(encrypted = character(), store = tempfile("cs")) {
+    ctx <- new.env(parent = emptyenv())
+    ctx$encrypted <- encrypted
+    ctx$store <- store
+    ctx$account <- NULL
+    ctx$sessions <- list()
+    ctx
+}
+
+stub <- function(name, value, ns) {
+    orig <- get(name, envir = asNamespace(ns))
+    assignInNamespace(name, value, ns = ns)
+    orig
+}
+
+mx_cfg <- list(user_id = "@bot:ex", device_id = "DEV",
+               server = "https://ex.invalid", token = "tok")
+
+# An unanswerable encryption state aborts rather than answering FALSE.
+# Turning an expired token, a timeout, or a 500 into "not encrypted" sent
+# the message in the clear.
+local({
+    orig <- stub("mx_room_encrypted",
+                 function(...) stop("Matrix error [M_UNKNOWN_TOKEN]"),
+                 "mx.client")
+    on.exit(assignInNamespace("mx_room_encrypted", orig, ns = "mx.client"))
+    expect_error(
+        chat.api:::matrix_room_is_encrypted(crypto_ctx(), mx_cfg, "!r:ex"),
+        "cannot determine the encryption state")
+})
+
+# A room that answers TRUE is remembered, so the next send skips the
+# lookup -- which is also what keeps a transient failure from blocking a
+# room already known to be encrypted.
+local({
+    ctx <- crypto_ctx()
+    orig <- stub("mx_room_encrypted", function(...) TRUE, "mx.client")
+    on.exit(assignInNamespace("mx_room_encrypted", orig, ns = "mx.client"))
+    expect_true(chat.api:::matrix_room_is_encrypted(ctx, mx_cfg, "!r:ex"))
+    expect_true("!r:ex" %in% ctx$encrypted)
+})
+local({
+    ctx <- crypto_ctx(encrypted = "!r:ex")
+    orig <- stub("mx_room_encrypted", function(...) stop("down"), "mx.client")
+    on.exit(assignInNamespace("mx_room_encrypted", orig, ns = "mx.client"))
+    expect_true(chat.api:::matrix_room_is_encrypted(ctx, mx_cfg, "!r:ex"))
+})
+
+# A room that answers FALSE is a plaintext room, and is not cached: the
+# next send asks again, so a room that turns encryption on is caught.
+local({
+    asked <- 0L
+    ctx <- crypto_ctx()
+    orig <- stub("mx_room_encrypted",
+                 function(...) { asked <<- asked + 1L; FALSE }, "mx.client")
+    on.exit(assignInNamespace("mx_room_encrypted", orig, ns = "mx.client"))
+    expect_false(chat.api:::matrix_room_is_encrypted(ctx, mx_cfg, "!r:ex"))
+    expect_false(chat.api:::matrix_room_is_encrypted(ctx, mx_cfg, "!r:ex"))
+    expect_identical(asked, 2L)
+    expect_identical(ctx$encrypted, character())
+})
+
+# No crypto context is not an encrypted room, and asks nobody.
+local({
+    orig <- stub("mx_room_encrypted", function(...) stop("must not be asked"),
+                 "mx.client")
+    on.exit(assignInNamespace("mx_room_encrypted", orig, ns = "mx.client"))
+    expect_false(chat.api:::matrix_room_is_encrypted(NULL, mx_cfg, "!r:ex"))
+})
+
+# Membership discovery is not best-effort. mx_send_encrypted() derives
+# the recipient devices from member_ids: an empty list shares the room key
+# with nobody, posts the event anyway, and returns an event id, so the
+# room cannot read the message while the caller records a successful send.
+local({
+    sent <- 0L
+    o1 <- stub("mx_client_session", function(...) list(server = "s"),
+               "mx.client")
+    o2 <- stub("mx_room_members", function(...) stop("500 from homeserver"),
+               "mx.api")
+    o3 <- stub("mx_send_encrypted",
+               function(...) { sent <<- sent + 1L
+                               list(event_id = "$e", sessions = list()) },
+               "mx.client")
+    on.exit({
+        assignInNamespace("mx_client_session", o1, ns = "mx.client")
+        assignInNamespace("mx_room_members", o2, ns = "mx.api")
+        assignInNamespace("mx_send_encrypted", o3, ns = "mx.client")
+    })
+    expect_error(chat.api:::matrix_crypto_send(crypto_ctx(), mx_cfg, "!r:ex",
+                                               "secret"),
+                 "500 from homeserver")
+    expect_identical(sent, 0L)
+})
+
+# An empty member list is the same refusal, reached without an error to
+# propagate.
+local({
+    sent <- 0L
+    o1 <- stub("mx_client_session", function(...) list(server = "s"),
+               "mx.client")
+    o2 <- stub("mx_room_members", function(...) character(), "mx.api")
+    o3 <- stub("mx_send_encrypted",
+               function(...) { sent <<- sent + 1L
+                               list(event_id = "$e", sessions = list()) },
+               "mx.client")
+    on.exit({
+        assignInNamespace("mx_client_session", o1, ns = "mx.client")
+        assignInNamespace("mx_room_members", o2, ns = "mx.api")
+        assignInNamespace("mx_send_encrypted", o3, ns = "mx.client")
+    })
+    expect_error(chat.api:::matrix_crypto_send(crypto_ctx(), mx_cfg, "!r:ex",
+                                               "secret"),
+                 "reach nobody")
+    expect_identical(sent, 0L)
+})
+
+# A session that cannot be built is the same: no send.
+local({
+    sent <- 0L
+    o1 <- stub("mx_client_session", function(...) stop("no server in config"),
+               "mx.client")
+    o3 <- stub("mx_send_encrypted",
+               function(...) { sent <<- sent + 1L
+                               list(event_id = "$e", sessions = list()) },
+               "mx.client")
+    on.exit({
+        assignInNamespace("mx_client_session", o1, ns = "mx.client")
+        assignInNamespace("mx_send_encrypted", o3, ns = "mx.client")
+    })
+    expect_error(chat.api:::matrix_crypto_send(crypto_ctx(), mx_cfg, "!r:ex",
+                                               "secret"),
+                 "no server in config")
+    expect_identical(sent, 0L)
+})
+
+# With members, the send goes through and carries them, plus the content
+# the cleartext path would have PUT.
+local({
+    seen <- NULL
+    o1 <- stub("mx_client_session", function(...) list(server = "s"),
+               "mx.client")
+    o2 <- stub("mx_room_members", function(...) c("@a:ex", "@b:ex"), "mx.api")
+    o3 <- stub("mx_send_encrypted",
+               function(client, account, sessions, room_id, content, store_dir,
+                        recipients = NULL, member_ids = NULL) {
+                   seen <<- list(content = content, member_ids = member_ids,
+                                 room_id = room_id)
+                   list(event_id = "$enc", sessions = "new")
+               }, "mx.client")
+    on.exit({
+        assignInNamespace("mx_client_session", o1, ns = "mx.client")
+        assignInNamespace("mx_room_members", o2, ns = "mx.api")
+        assignInNamespace("mx_send_encrypted", o3, ns = "mx.client")
+    })
+    ctx <- crypto_ctx()
+    expect_identical(chat.api:::matrix_crypto_send(ctx, mx_cfg, "!r:ex",
+                                                   "**hi**",
+                                                   markdown = TRUE), "$enc")
+    expect_identical(seen$member_ids, c("@a:ex", "@b:ex"))
+    expect_identical(seen$content$body, "**hi**")
+    expect_identical(seen$content$format, "org.matrix.custom.html")
+    expect_true(grepl("<strong>hi</strong>", seen$content$formatted_body))
+    # The updated session set is kept, or the next send re-shares the key.
+    expect_identical(ctx$sessions, "new")
+})
+
+# The content an encrypted send wraps is the one mx_send_text() PUTs in
+# the clear, so a room's encryption state changes the envelope and
+# nothing a reader sees.
+content <- chat.api:::matrix_crypto_content
+expect_identical(content("hi")$body, "hi")
+expect_null(content("hi")$formatted_body)
+expect_identical(content("hi", msgtype = "m.notice")$msgtype, "m.notice")
+expect_true(grepl("<strong>hi</strong>",
+                  content("**hi**", markdown = TRUE)$formatted_body))
+m <- content("hi", mentions = "@c:ex")
+expect_identical(m[["m.mentions"]]$user_ids, list("@c:ex"))
+expect_identical(m$format, "org.matrix.custom.html")
+
+# matrix_crypto_init() binds the store before it opens the account, so a
+# store belonging to another device is refused rather than unpickled.
+# Every mx.client entry point below is stubbed: what is under test is the
+# order of the adapter's own steps, not the cryptography.
+if (requireNamespace("mx.crypto", quietly = TRUE)) {
+    local({
+        opened <- 0L
+        o1 <- stub("mx_crypto_account",
+                   function(...) { opened <<- opened + 1L; "acct" },
+                   "mx.client")
+        o2 <- stub("mx_crypto_publish_keys", function(...) invisible(TRUE),
+                   "mx.client")
+        o3 <- stub("mx_crypto_sessions_load", function(...) list(),
+                   "mx.client")
+        o4 <- stub("mx_client_session", function(...) stop("offline"),
+                   "mx.client")
+        o5 <- stub("mxc_account_identity_keys",
+                   function(...) list(curve25519 = "C", ed25519 = "E"),
+                   "mx.crypto")
+        on.exit({
+            assignInNamespace("mx_crypto_account", o1, ns = "mx.client")
+            assignInNamespace("mx_crypto_publish_keys", o2, ns = "mx.client")
+            assignInNamespace("mx_crypto_sessions_load", o3, ns = "mx.client")
+            assignInNamespace("mx_client_session", o4, ns = "mx.client")
+            assignInNamespace("mxc_account_identity_keys", o5, ns = "mx.crypto")
+        })
+
+        store <- tempfile("initstore")
+        a <- list(user_id = "@a:ex", device_id = "D1", token = "t",
+                  server = "https://ex.invalid")
+        ctx <- chat.api:::matrix_crypto_init(a, store = store)
+        expect_identical(ctx$store, store)
+        expect_identical(opened, 1L)
+        expect_identical(readLines(file.path(store, "identity.txt")),
+                         c("@a:ex", "D1"))
+
+        # Another device pointed at the same store is refused, and the
+        # account is never opened for it.
+        b <- list(user_id = "@b:ex", device_id = "D2", token = "t",
+                  server = "https://ex.invalid")
+        expect_error(chat.api:::matrix_crypto_init(b, store = store),
+                     "belongs to")
+        expect_identical(opened, 1L)
+        unlink(store, recursive = TRUE)
+    })
+}

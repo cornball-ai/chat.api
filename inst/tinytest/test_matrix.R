@@ -5,9 +5,12 @@
 # The half that pins the adapter to mx.client's real signatures lives in
 # test_matrix_mxclient.R, which announces its skip.
 
-fake_mx <- function(sync_token = NULL) {
-    list(user_id = "@bot:ex", server = "https://ex.invalid",
-         sync_token = sync_token)
+# device_id is here because an Olm account belongs to a device: an e2ee
+# client refuses a config that cannot name one.
+fake_mx <- function(sync_token = NULL, user_id = "@bot:ex",
+                    device_id = "DEV1") {
+    list(user_id = user_id, server = "https://ex.invalid",
+         device_id = device_id, sync_token = sync_token)
 }
 
 # An extractor-shaped record: the seven fields mx_extract_text_events
@@ -50,7 +53,13 @@ seam_client <- function(recs = list(), sync = wrap_sync(list()),
                 record$sync[[length(record$sync) + 1L]] <- c(
                     list(client = client), list(...))
             }
-            list(sync = sync, client = fake_mx(token), first_run = first_run)
+            # The post-sync config keeps the identity it went in with. A
+            # real sync (or relogin) rotates the token, never the
+            # user_id/device_id, and crypto is keyed on those.
+            list(sync = sync,
+                 client = fake_mx(token, user_id = client$user_id,
+                                  device_id = client$device_id),
+                 first_run = first_run)
         },
         .extract = function(sync_resp, self_id, ...) {
             if (!is.null(record)) {
@@ -473,15 +482,17 @@ local({
 # ---- E2EE ----
 # The .crypto seam stands in for the whole crypto module, so these run
 # with neither mx.crypto nor a Rust toolchain. What is under test is the
-# adapter's routing: which path a send takes, and whether decrypted
-# events reach the caller as ordinary chat_message records.
+# adapter's routing: which path a send takes, when crypto state is built
+# and persisted, and whether decrypted events reach the caller as
+# ordinary chat_message records in the order the homeserver sent them.
 
 # A fake crypto context plus ops that record what the adapter asked for.
 # Contexts are interned per identity, so a fresh fake starts by dropping
 # whatever the previous one interned; otherwise every case after the first
 # would silently reuse an earlier fake's context.
 fake_crypto <- function(encrypted_rooms = "!enc:ex", decrypted = list(),
-                        event_id = "$enc1", decrypt_error = FALSE) {
+                        event_id = "$enc1", decrypt_error = FALSE,
+                        lookup_error = FALSE, init_error = FALSE) {
     chat.api:::matrix_crypto_forget()
     log <- new.env(parent = emptyenv())
     log$init <- list()
@@ -494,10 +505,16 @@ fake_crypto <- function(encrypted_rooms = "!enc:ex", decrypted = list(),
         init = function(mx, store = NULL, app = NULL) {
             log$init[[length(log$init) + 1L]] <- list(mx = mx, store = store,
                                                       app = app)
+            if (isTRUE(init_error)) {
+                stop("keys could not be published")
+            }
             ctx
         },
         encrypted = function(crypto, mx, room_id) {
             log$asked <- c(log$asked, room_id)
+            if (isTRUE(lookup_error)) {
+                stop("cannot determine the encryption state of ", room_id)
+            }
             room_id %in% crypto$encrypted
         },
         send = function(crypto, mx, room_id, text, msgtype = "m.text",
@@ -523,59 +540,101 @@ plain <- seam_client()
 expect_null(plain$env$crypto)
 expect_false(plain$e2ee)
 expect_false(chat_capabilities(plain)$e2ee)
+expect_true(chat_capabilities(plain)$files)
 
 # init is not called either: an unused crypto module must not touch the
 # store or publish keys.
 f <- fake_crypto()
 off <- seam_client(e2ee = FALSE, .crypto = f$ops)
+chat_poll(off)
+chat_send(off, "!enc:ex", "hi")
 expect_identical(length(f$log$init), 0L)
 expect_null(off$env$crypto)
 
-# e2ee = TRUE builds the context, and the capability follows the context
-# rather than the installed packages.
+# ---- Crypto is built on first use, not at construction ----
+# Initialization publishes keys, which is an authenticated request. The
+# stored token may already be rejected at process start -- that is what
+# mx_with_relogin() is for -- so building here put the upload ahead of
+# any relogin. chat_matrix() threw, the poll loop never ran, and every
+# restart repeated with the same dead token.
+
 f <- fake_crypto()
 enc <- seam_client(e2ee = TRUE, .crypto = f$ops)
-expect_identical(length(f$log$init), 1L)
-expect_true(is.environment(enc$env$crypto))
+expect_identical(length(f$log$init), 0L)
+expect_null(enc$env$crypto)
+# The capability answers from the setting, not the context, so it does not
+# flip after the first poll.
 expect_true(chat_capabilities(enc)$e2ee)
+# ... and files is FALSE, because mx_send_media posts a cleartext m.file
+# event whatever the room's encryption state says.
+expect_false(chat_capabilities(enc)$files)
 
-# The store is derived inside init, not by the constructor, so mx.client
-# is only needed on the path that does crypto. app and an explicit
-# crypto_store both reach it.
-f <- fake_crypto()
-seam_client(e2ee = TRUE, app = "cornelius", .crypto = f$ops)
-expect_identical(f$log$init[[1L]]$app, "cornelius")
-expect_null(f$log$init[[1L]]$store)
-f <- fake_crypto()
-seam_client(e2ee = TRUE, crypto_store = "/tmp/store", .crypto = f$ops)
-expect_identical(f$log$init[[1L]]$store, "/tmp/store")
+# A construction that would have died now survives to the first poll,
+# which is where relogin gets its chance.
+expect_silent(seam_client(e2ee = TRUE, .crypto = fake_crypto(init_error = TRUE)$ops))
+expect_error(chat_poll(seam_client(e2ee = TRUE,
+                                   .crypto = fake_crypto(init_error = TRUE)$ops)),
+             "keys could not be published")
 
-# An explicit config path with no app and no crypto_store cannot name a
-# unique store: the default is keyed on the app namespace alone, so two
-# bots built that way would share one Olm account and the second would
-# come up wearing the first's device keys. That is an error, not a guess.
-expect_error(chat_matrix(mx = fake_mx(), path = "/tmp/bot.json", e2ee = TRUE,
+# The first poll builds it, off the post-sync config rather than the one
+# the client was constructed with -- that is the whole point of waiting.
+f <- fake_crypto()
+enc <- seam_client(e2ee = TRUE, .crypto = f$ops, token = "after-relogin")
+chat_poll(enc)
+expect_identical(length(f$log$init), 1L)
+expect_identical(f$log$init[[1L]]$mx$sync_token, "after-relogin")
+expect_true(is.environment(enc$env$crypto))
+# Later polls reuse it.
+chat_poll(enc)
+expect_identical(length(f$log$init), 1L)
+
+# A send builds it too, for a client that sends before it polls.
+f <- fake_crypto()
+enc <- seam_client(e2ee = TRUE, .crypto = f$ops)
+chat_send(enc, "!enc:ex", "secret")
+expect_identical(length(f$log$init), 1L)
+
+# ---- The store is bound to a device identity ----
+# An Olm account belongs to a device, not a user. A config that cannot
+# name one cannot key a store, and the check runs at construction so the
+# caller hears about it there.
+expect_error(chat_matrix(mx = list(user_id = "@bot:ex"), e2ee = TRUE,
                          .sync = function(...) NULL,
                          .extract = function(...) list(),
                          .send = function(...) "$id",
                          .media = function(...) NULL,
                          .crypto = fake_crypto()$ops),
-             "unique to this identity")
-# The same path with an app names one, so it is allowed.
+             "user_id and device_id")
+expect_error(chat_matrix(mx = list(device_id = "DEV1"), e2ee = TRUE,
+                         .sync = function(...) NULL,
+                         .extract = function(...) list(),
+                         .send = function(...) "$id",
+                         .media = function(...) NULL,
+                         .crypto = fake_crypto()$ops),
+             "user_id and device_id")
+# e2ee off does not need one: a cleartext client has no account to key.
+expect_silent(seam_client(mx = list(user_id = "@bot:ex")))
+
+# The cache key carries the identity. Keying on app or store alone had two
+# clients built the documented way -- chat_matrix(mx = ..., e2ee = TRUE)
+# with no app and no store -- collapse onto one entry and share an account.
+k <- chat.api:::matrix_crypto_cache_key
+expect_false(identical(k(NULL, NULL, fake_mx(user_id = "@a:ex")),
+                       k(NULL, NULL, fake_mx(user_id = "@b:ex"))))
+expect_false(identical(k(NULL, NULL, fake_mx(device_id = "D1")),
+                       k(NULL, NULL, fake_mx(device_id = "D2"))))
+expect_false(identical(k("/s", NULL, fake_mx(device_id = "D1")),
+                       k("/s", NULL, fake_mx(device_id = "D2"))))
+expect_identical(k(NULL, NULL, fake_mx()), k(NULL, NULL, fake_mx()))
+expect_false(identical(k(NULL, "a", fake_mx()), k(NULL, "b", fake_mx())))
+
+# Two default clients for different bots get two contexts.
 f <- fake_crypto()
-ok <- chat_matrix(mx = fake_mx(), path = "/tmp/bot.json", app = "tiny",
-                  e2ee = TRUE, .sync = function(...) NULL,
-                  .extract = function(...) list(),
-                  .send = function(...) "$id", .media = function(...) NULL,
-                  .crypto = f$ops)
-expect_true(is.environment(ok$env$crypto))
-# ... and so does crypto_store on its own.
-expect_true(is.environment(
-    chat_matrix(mx = fake_mx(), path = "/tmp/bot.json", e2ee = TRUE,
-                crypto_store = "/tmp/store", .sync = function(...) NULL,
-                .extract = function(...) list(),
-                .send = function(...) "$id", .media = function(...) NULL,
-                .crypto = fake_crypto()$ops)$env$crypto))
+chat_poll(seam_client(e2ee = TRUE, .crypto = f$ops,
+                      mx = fake_mx(user_id = "@one:ex")))
+chat_poll(seam_client(e2ee = TRUE, .crypto = f$ops,
+                      mx = fake_mx(user_id = "@two:ex")))
+expect_identical(length(f$log$init), 2L)
 
 # ---- One Olm account per identity ----
 # A consumer that derives a fresh client per use -- corteza does, so the
@@ -586,43 +645,34 @@ expect_true(is.environment(
 f <- fake_crypto()
 a <- seam_client(e2ee = TRUE, app = "cornelius", .crypto = f$ops)
 b <- seam_client(e2ee = TRUE, app = "cornelius", .crypto = f$ops)
+chat_poll(a)
+chat_poll(b)
 expect_identical(length(f$log$init), 1L)
 expect_true(identical(a$env$crypto, b$env$crypto))
 
-# Two identities are two contexts. Sharing one would have the second bot
-# come up wearing the first's device keys.
+# An explicit crypto_store keys on the store plus the identity, so two
+# stores are two contexts and one store is one.
 f <- fake_crypto()
-one <- seam_client(e2ee = TRUE, app = "cornelius", .crypto = f$ops)
-two <- seam_client(e2ee = TRUE, app = "tiny", .crypto = f$ops)
+chat_send(seam_client(e2ee = TRUE, crypto_store = "/tmp/store-a",
+                      .crypto = f$ops), "!enc:ex", "x")
+chat_send(seam_client(e2ee = TRUE, crypto_store = "/tmp/store-a",
+                      .crypto = f$ops), "!enc:ex", "x")
+chat_send(seam_client(e2ee = TRUE, crypto_store = "/tmp/store-b",
+                      .crypto = f$ops), "!enc:ex", "x")
 expect_identical(length(f$log$init), 2L)
-expect_identical(f$log$init[[1L]]$app, "cornelius")
-expect_identical(f$log$init[[2L]]$app, "tiny")
-# The fake returns one shared environment, so identity of the context
-# cannot be the assertion here; that init ran twice is.
-expect_identical(sort(names(f$log$init[[1L]])), c("app", "mx", "store"))
-
-# An explicit crypto_store keys on the store, and the app default keys on
-# the app, so the two never collide.
-f <- fake_crypto()
-seam_client(e2ee = TRUE, crypto_store = "/tmp/store-a", .crypto = f$ops)
-seam_client(e2ee = TRUE, crypto_store = "/tmp/store-a", .crypto = f$ops)
-seam_client(e2ee = TRUE, crypto_store = "/tmp/store-b", .crypto = f$ops)
-expect_identical(length(f$log$init), 2L)
-
-# The cache key is a plain identity string, not a resolved directory:
-# resolving one calls into mx.client, and the seam exists so the e2ee
-# paths run without it.
-expect_identical(chat.api:::matrix_crypto_cache_key(NULL, NULL), "app:chat.api")
-expect_identical(chat.api:::matrix_crypto_cache_key(NULL, "tiny"), "app:tiny")
-expect_identical(chat.api:::matrix_crypto_cache_key("/s", "tiny"), "/s")
+expect_identical(f$log$init[[1L]]$store, "/tmp/store-a")
+expect_identical(f$log$init[[2L]]$store, "/tmp/store-b")
 
 # Forgetting one identity leaves the others interned.
 f <- fake_crypto()
-seam_client(e2ee = TRUE, app = "cornelius", .crypto = f$ops)
-seam_client(e2ee = TRUE, app = "tiny", .crypto = f$ops)
-chat.api:::matrix_crypto_forget("app:tiny")
-seam_client(e2ee = TRUE, app = "cornelius", .crypto = f$ops)
-seam_client(e2ee = TRUE, app = "tiny", .crypto = f$ops)
+one <- seam_client(e2ee = TRUE, app = "cornelius", .crypto = f$ops)
+two <- seam_client(e2ee = TRUE, app = "tiny", .crypto = f$ops)
+chat_poll(one)
+chat_poll(two)
+chat.api:::matrix_crypto_forget(
+    chat.api:::matrix_crypto_cache_key(NULL, "tiny", fake_mx()))
+chat_poll(seam_client(e2ee = TRUE, app = "cornelius", .crypto = f$ops))
+chat_poll(seam_client(e2ee = TRUE, app = "tiny", .crypto = f$ops))
 expect_identical(length(f$log$init), 3L)
 expect_identical(f$log$init[[3L]]$app, "tiny")
 
@@ -658,6 +708,53 @@ f$ctx$encrypted <- c(f$ctx$encrypted, "!plain:ex")
 expect_identical(chat_send(enc, "!plain:ex", "now secret"), "$enc1")
 expect_identical(cleartext$n, 1L)
 
+# ---- An unanswerable encryption state is not a plaintext room ----
+# The lookup used to turn every failure -- expired token, timeout, 500 --
+# into FALSE, and the send went out in the clear. On an e2ee client that
+# is a leak, so it aborts instead.
+f <- fake_crypto(lookup_error = TRUE)
+cleartext <- new.env(parent = emptyenv()); cleartext$n <- 0L
+enc <- seam_client(e2ee = TRUE, .crypto = f$ops,
+                   send = function(...) { cleartext$n <- cleartext$n + 1L
+                                          "$clear1" })
+expect_error(chat_send(enc, "!unknown:ex", "secret"),
+             "cannot determine the encryption state")
+expect_identical(cleartext$n, 0L)
+expect_identical(length(f$log$sent), 0L)
+# A cleartext client is untouched: with no crypto context there is no
+# lookup to fail, and the send goes out as it always did.
+plain <- seam_client(.crypto = f$ops,
+                     send = function(...) { cleartext$n <- cleartext$n + 1L
+                                            "$clear1" })
+expect_identical(chat_send(plain, "!unknown:ex", "hi"), "$clear1")
+expect_identical(cleartext$n, 1L)
+
+# ---- Attachments are refused in encrypted rooms ----
+# mx_send_media() posts an ordinary cleartext m.file event. The check used
+# to run after the upload loop, so the files reached the homeserver in the
+# clear and only the text took the Megolm path -- and an attachment-only
+# send never asked at all.
+f <- fake_crypto()
+uploads <- new.env(parent = emptyenv()); uploads$n <- 0L
+enc <- seam_client(e2ee = TRUE, .crypto = f$ops,
+                   media = function(mx, file, ...) {
+                       uploads$n <- uploads$n + 1L
+                       paste0("$m", basename(file))
+                   })
+expect_error(chat_send(enc, "!enc:ex", "see these", files = "/a.png"),
+             "cannot send attachments to the encrypted room")
+# Nothing was uploaded: the refusal comes before the loop, not after it.
+expect_identical(uploads$n, 0L)
+expect_identical(length(f$log$sent), 0L)
+# Attachment-only sends are refused on the same terms.
+expect_error(chat_send(enc, "!enc:ex", "", files = "/a.png"),
+             "cannot send attachments")
+expect_identical(uploads$n, 0L)
+# A plaintext room on the same client still takes attachments.
+ids <- chat_send(enc, "!plain:ex", "see these", files = c("/a.png", "/b.png"))
+expect_identical(ids, c("$ma.png", "$mb.png", "$id"))
+expect_identical(uploads$n, 2L)
+
 # markup, kind, and mentions carry into the encrypted branch. Dropping
 # them would make an encrypted room silently lose formatting and pings
 # that the same call gets in the clear.
@@ -680,20 +777,15 @@ enc$env$mx <- fake_mx(sync_token = "rotated")
 chat_send(enc, "!enc:ex", "after relogin")
 expect_identical(f$log$sent[[3L]]$mx$sync_token, "rotated")
 
-# Attachments plus encrypted text: media ids first, encrypted event last,
-# same contract the cleartext path reports.
+# A failed encrypted send propagates, the same way the cleartext path's
+# failures do. Reporting no event id would have a caller record the
+# message as sent-but-unacknowledged rather than as failed.
 f <- fake_crypto()
 enc <- seam_client(e2ee = TRUE, .crypto = f$ops,
-                   media = function(mx, file, ...) paste0("$m", basename(file)))
-ids <- chat_send(enc, "!enc:ex", "see these", files = c("/a.png", "/b.png"))
-expect_identical(ids, c("$ma.png", "$mb.png", "$enc1"))
-
-# A failed encrypted send reports no event id, the same way the cleartext
-# path does, rather than inventing one or falling back to plaintext.
-f <- fake_crypto(event_id = NULL)
-enc <- seam_client(e2ee = TRUE, .crypto = f$ops,
                    send = function(...) stop("must not be reached"))
-expect_identical(chat_send(enc, "!enc:ex", "secret"), character(0))
+enc$crypto_ops$send <- function(...) stop("olm session could not be opened")
+expect_error(chat_send(enc, "!enc:ex", "secret"),
+             "olm session could not be opened")
 
 # ---- Decryption on poll ----
 
@@ -707,8 +799,8 @@ dec_rec <- function(event_id, body = "psst", sender = "@alice:ex",
 }
 
 # Decrypted events come out as ordinary chat_message records, folded in
-# beside the cleartext ones. corteza used to run its own decrypt off
-# $raw and concatenate the results itself; that is what this replaces.
+# beside the cleartext ones. corteza used to run its own decrypt off $raw
+# and concatenate the results itself.
 f <- fake_crypto(decrypted = list(dec_rec("$e1", ts = 1700000000000)))
 enc <- seam_client(recs = list(rec("$c1", body = "in the clear")),
                    e2ee = TRUE, .crypto = f$ops)
@@ -729,6 +821,41 @@ expect_identical(m$body, "psst")
 expect_true(m$encrypted)
 expect_true(m$sender_verified)
 expect_identical(m$kind, "message")
+
+# ---- Mixed timelines keep the homeserver's order ----
+# Appending the decrypted events put every one of them after every
+# cleartext one, so an encrypted message followed by a plain reply came
+# back the other way round -- which reorders a room's commands against
+# the messages they act on.
+f <- fake_crypto(decrypted = list(dec_rec("$first", body = "encrypted 1st")))
+enc <- seam_client(recs = list(rec("$second", body = "clear 2nd")),
+                   e2ee = TRUE, .crypto = f$ops,
+                   sync = wrap_sync(list(ev("$first"), ev("$second"))))
+res <- chat_poll(enc)
+expect_identical(vapply(res$messages, function(m) m$id, character(1)),
+                 c("$first", "$second"))
+expect_true(res$messages[[1L]]$encrypted)
+expect_false(res$messages[[2L]]$encrypted)
+
+# Interleaved, three deep, to catch an ordering that only looks right
+# when the encrypted event happens to come first.
+f <- fake_crypto(decrypted = list(dec_rec("$b"), dec_rec("$d")))
+enc <- seam_client(recs = list(rec("$a"), rec("$c"), rec("$e")),
+                   e2ee = TRUE, .crypto = f$ops,
+                   sync = wrap_sync(list(ev("$a"), ev("$b"), ev("$c"),
+                                         ev("$d"), ev("$e"))))
+expect_identical(vapply(chat_poll(enc)$messages, function(m) m$id,
+                        character(1)),
+                 c("$a", "$b", "$c", "$d", "$e"))
+
+# An event the sync did not position keeps its arrival order at the end
+# rather than being dropped.
+f <- fake_crypto(decrypted = list(dec_rec("$nowhere")))
+enc <- seam_client(recs = list(rec("$a")), e2ee = TRUE, .crypto = f$ops,
+                   sync = wrap_sync(list(ev("$a"))))
+expect_identical(vapply(chat_poll(enc)$messages, function(m) m$id,
+                        character(1)),
+                 c("$a", "$nowhere"))
 
 # An unverified sender is FALSE, not NULL: the payload decrypted, but the
 # claimed sender is the homeserver's word rather than a verified device.
@@ -764,15 +891,56 @@ f <- fake_crypto(decrypted = list(dec_rec("$e1", is_self = TRUE)))
 res <- chat_poll(seam_client(e2ee = TRUE, .crypto = f$ops))
 expect_true(res$messages[[1L]]$self)
 
-# A decrypt that throws warns and loses the encrypted traffic, but the
-# poll still returns the cleartext messages and advances the cursor. One
-# room with a missing Megolm session must not stall the whole loop.
+# ---- A sync is not consumed until its crypto state is on disk ----
+# mx_sync_update(save = TRUE) commits the advanced cursor before anything
+# parses the response, which is what makes a malformed event survivable.
+# But a sync carrying a room key is only consumed once that key is
+# persisted: the homeserver never re-sends it, so a crash in between
+# leaves every later message in that room undecryptable.
+
+saves <- new.env(parent = emptyenv())
+saves$order <- character()
+saved_client <- function(f, ...) {
+    seam_client(e2ee = TRUE, .crypto = f$ops,
+                .save = function(client, app = NULL, ...) {
+                    saves$order <- c(saves$order, "cursor")
+                    client
+                }, ...)
+}
+
+# The sync does not write the cursor itself...
+f <- fake_crypto()
+f$ops$decrypt <- function(crypto, sync, mx) {
+    saves$order <- c(saves$order, "crypto")
+    list()
+}
+trace <- new.env(); trace$sync <- list(); trace$extract <- list()
+saves$order <- character()
+chat_poll(saved_client(f, record = trace))
+expect_false(trace$sync[[1L]]$save)
+# ... it is written afterwards, and after the crypto state.
+expect_identical(saves$order, c("crypto", "cursor"))
+
+# A crypto failure means the sync was not consumed: no cursor write, and
+# the error is not swallowed. mx.client already skips an individual event
+# it has no session for, so a throw here is to-device processing or the
+# session save itself.
 f <- fake_crypto(decrypt_error = TRUE)
-enc <- seam_client(recs = list(rec("$c1")), e2ee = TRUE, .crypto = f$ops,
-                   token = "s2")
-expect_warning(res <- chat_poll(enc), "decrypt failed")
-expect_identical(length(res$messages), 1L)
-expect_identical(res$cursor, "s2")
+saves$order <- character()
+expect_error(chat_poll(saved_client(f)), "no session for that megolm stream")
+expect_identical(saves$order, character())
+
+# save_cursor = FALSE still means nothing is written, either way.
+f <- fake_crypto()
+saves$order <- character()
+chat_poll(saved_client(f, save_cursor = FALSE))
+expect_identical(saves$order, character())
+
+# A cleartext client keeps the cursor inside the sync, where the
+# poison-pill protection wants it. Only e2ee pays for durability.
+trace2 <- new.env(); trace2$sync <- list(); trace2$extract <- list()
+chat_poll(seam_client(record = trace2))
+expect_true(trace2$sync[[1L]]$save)
 
 # Nothing consults crypto when e2ee is off, so an installed mx.crypto
 # cannot change what a cleartext client does.
@@ -816,6 +984,86 @@ unlink(store2, recursive = TRUE)
 ops <- chat.api:::matrix_crypto_ops()
 expect_identical(sort(names(ops)), c("decrypt", "encrypted", "init", "send"))
 expect_identical(ops$send, chat.api:::matrix_crypto_send)
-partial <- chat.api:::matrix_crypto_ops(list(send = function(...) "$x"))
-expect_identical(partial$decrypt, chat.api:::matrix_crypto_decrypt)
-expect_false(identical(partial$send, chat.api:::matrix_crypto_send))
+
+# ---- The store is bound to the device that owns it ----
+# The directory name is sanitized and therefore not injective: "@a/b:ex"
+# and "@a_b:ex" land in the same place. The exact identity is written
+# into the store and compared on every open, so a collision -- or a
+# copied store, or a changed device_id -- is an error rather than one bot
+# silently opening another's Olm account.
+store <- tempfile("chatapi-id")
+chat.api:::matrix_crypto_bind_identity(store, fake_mx(user_id = "@a:ex",
+                                                     device_id = "D1"))
+expect_true(file.exists(file.path(store, "identity.txt")))
+expect_identical(readLines(file.path(store, "identity.txt")),
+                 c("@a:ex", "D1"))
+# Reopening with the same identity is fine, and does not rewrite it.
+expect_silent(chat.api:::matrix_crypto_bind_identity(
+    store, fake_mx(user_id = "@a:ex", device_id = "D1")))
+# A different user, or the same user on a different device, is not.
+expect_error(chat.api:::matrix_crypto_bind_identity(
+    store, fake_mx(user_id = "@b:ex", device_id = "D1")),
+    "belongs to")
+expect_error(chat.api:::matrix_crypto_bind_identity(
+    store, fake_mx(user_id = "@a:ex", device_id = "D2")),
+    "belongs to")
+# The collision the sanitization allows is caught by the same check.
+expect_identical(
+    chat.api:::matrix_crypto_store(fake_mx(user_id = "@a/b:ex",
+                                           device_id = "D"), app = "t"),
+    chat.api:::matrix_crypto_store(fake_mx(user_id = "@a_b:ex",
+                                           device_id = "D"), app = "t"))
+shared <- tempfile("chatapi-collide")
+chat.api:::matrix_crypto_bind_identity(shared, fake_mx(user_id = "@a/b:ex",
+                                                      device_id = "D"))
+expect_error(chat.api:::matrix_crypto_bind_identity(
+    shared, fake_mx(user_id = "@a_b:ex", device_id = "D")), "belongs to")
+unlink(c(store, shared), recursive = TRUE)
+
+# Both halves of the identity are required, wherever it is asked for.
+expect_error(chat.api:::matrix_crypto_identity(list(user_id = "@a:ex")),
+             "user_id and device_id")
+expect_error(chat.api:::matrix_crypto_identity(list(device_id = "D")),
+             "user_id and device_id")
+expect_error(chat.api:::matrix_crypto_identity(
+    list(user_id = "@a:ex", device_id = "")), "user_id and device_id")
+expect_identical(
+    chat.api:::matrix_crypto_identity(list(user_id = "@a:ex",
+                                           device_id = "D"))[["device_id"]],
+    "D")
+
+# ---- The device query covers to-device senders ----
+# sender_bound is stamped once, when a room key arrives over to-device,
+# and persisted with the Megolm session; a later sync carrying a timeline
+# message from that sender does not rebind it. Room keys normally arrive
+# before the message they are for, so asking only about timeline senders
+# recorded them unverified forever.
+senders <- chat.api:::matrix_encrypted_senders
+td <- function(events) list(to_device = list(events = events))
+expect_identical(
+    senders(td(list(list(type = "m.room.encrypted", sender = "@a:ex")))),
+    "@a:ex")
+# Timeline and to-device are unioned, and each sender appears once.
+sync <- c(td(list(list(type = "m.room.encrypted", sender = "@a:ex"),
+                  list(type = "m.room.encrypted", sender = "@b:ex"))),
+          list(rooms = list(join = list(`!r:ex` = list(timeline = list(
+              events = list(list(type = "m.room.encrypted",
+                                 sender = "@a:ex"))))))))
+expect_identical(sort(senders(sync)), c("@a:ex", "@b:ex"))
+# Other to-device types are not senders to ask about.
+expect_identical(
+    senders(td(list(list(type = "m.room_key_request", sender = "@a:ex")))),
+    character())
+expect_identical(senders(list()), character())
+
+# ---- Timeline order ----
+pos <- chat.api:::matrix_event_order
+expect_identical(pos(wrap_sync(list(ev("$a"), ev("$b"))))[["$b"]], 2L)
+expect_identical(length(pos(list())), 0L)
+# Positions run across rooms, so the walk is the sync's own order rather
+# than a per-room one that would interleave arbitrarily.
+two <- list(rooms = list(join = list(
+    `!r1:ex` = list(timeline = list(events = list(ev("$a")))),
+    `!r2:ex` = list(timeline = list(events = list(ev("$b")))))))
+expect_identical(pos(two)[["$a"]], 1L)
+expect_identical(pos(two)[["$b"]], 2L)

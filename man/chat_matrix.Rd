@@ -16,7 +16,8 @@ chat_matrix(
   .send = NULL,
   .media = NULL,
   .typing = NULL,
-  .crypto = NULL
+  .crypto = NULL,
+  .save = NULL
 )
 }
 \arguments{
@@ -55,16 +56,26 @@ propagate.}
 inbound. FALSE (the default) is the previous behaviour exactly:
 cleartext only, no crypto state, and \code{e2ee} stays FALSE in
 \code{\link{chat_capabilities}}. Requires the 'mx.crypto' package,
-which needs a Rust toolchain.}
+which needs a Rust toolchain, and both \code{user_id} and
+\code{device_id} on the wrapped config.
+
+Three things change when it is on. The crypto state is built on the
+first poll or send rather than here, so key publication happens after
+a relogin rather than before one. The sync cursor is written after
+the crypto state instead of inside the sync, so a sync carrying a
+room key is not marked consumed until that key is on disk. And
+attachments are refused in encrypted rooms, because Matrix media
+uploads are not encrypted by this adapter --
+\code{\link{chat_capabilities}} reports \code{files = FALSE} to
+match.}
 
 \item{crypto_store}{Character or NULL. Directory holding the pickled
 Olm account and sessions. NULL derives it from \code{app} via
-\code{mx.client::mx_crypto_store_dir()}, which keys one store per
-app namespace regardless of where the config file lives, so moving a
-config does not cost the device identity. Because that key is the app
-name alone, an \code{e2ee = TRUE} client built from an explicit
-\code{path} with no \code{app} is an error: name one or the other, or
-two such clients would quietly share a device identity.}
+\code{mx.client::mx_crypto_store_dir()}, with a per-device
+subdirectory, so moving a config does not cost the device identity
+and two bots under one app namespace do not share an Olm account.
+Either way the store records the \code{(user_id, device_id)} it
+belongs to and refuses to open for a different one.}
 
 \item{.sync}{Testing seam: replacement for
 \code{mx.client::mx_sync_update}. Leave NULL in production.}
@@ -93,6 +104,11 @@ adapter's four crypto operations -- \code{init}, \code{encrypted},
 with neither mx.crypto nor a Rust toolchain; E2EE is the one part of
 this adapter with no honest way to reach a real homeserver from a
 test.}
+
+\item{.save}{Testing seam: replacement for
+\code{mx.client::mx_client_save}. Leave NULL in production. Only
+reached on an \code{e2ee} client, which writes the sync cursor after
+the crypto state rather than inside the sync.}
 }
 \value{
 A \code{chat_client} of class \code{chat_matrix}.

@@ -14,17 +14,65 @@ matrix_crypto_available <- function() {
     requireNamespace("mx.crypto", quietly = TRUE)
 }
 
+# The Matrix device an Olm account belongs to: (user_id, device_id).
+#
+# Both are required. An Olm account is a device's identity, not a user's,
+# so a store keyed on anything coarser is a store two identities can end
+# up sharing -- and the second to open it comes up wearing the first's
+# device keys.
+matrix_crypto_identity <- function(mx) {
+    uid <- mx$user_id %||% ""
+    did <- mx$device_id %||% ""
+    if (!nzchar(uid) || !nzchar(did)) {
+        stop("chat.api: end-to-end encryption needs both user_id and ",
+             "device_id on the Matrix config. An Olm account belongs to a ",
+             "device, and a store that cannot name one is a store two ",
+             "identities can share.", call. = FALSE)
+    }
+    c(user_id = uid, device_id = did)
+}
+
 # Where this identity's Olm account and sessions live.
 #
-# mx.client's own convention, under R_user_dir(app, "data"), deliberately
-# NOT derived from the config file's location. corteza computed
-# dirname(config)/crypto, which ties the crypto identity to wherever the
-# config happens to sit: point a bot at a different config path and it
-# silently mints a new device identity and loses every Megolm session it
-# had. Keying on the app namespace instead keeps one store per identity
-# however the config is addressed.
-matrix_crypto_store <- function(app = NULL) {
-    mx.client::mx_crypto_store_dir(app = app %||% "chat.api")
+# Under mx.client's own convention, R_user_dir(app, "data")/crypto, with a
+# per-device subdirectory. Deliberately NOT derived from the config file's
+# location: corteza computed dirname(config)/crypto, which ties the
+# identity to wherever the config happens to sit, so a moved config
+# silently minted a new device and lost every Megolm session it had.
+#
+# The directory name is sanitized and therefore not injective -- "@a/b:ex"
+# and "@a_b:ex" land in the same place. That is why the exact identity is
+# written into the store and checked on every open: a collision has to
+# fail loudly rather than hand one bot another's account.
+matrix_crypto_store <- function(mx, app = NULL) {
+    id <- matrix_crypto_identity(mx)
+    slug <- gsub("[^A-Za-z0-9._-]", "_",
+                 paste(id[["user_id"]], id[["device_id"]], sep = "|"))
+    file.path(mx.client::mx_crypto_store_dir(app = app %||% "chat.api"), slug)
+}
+
+# Bind a store to one device identity, and refuse to open one bound to
+# another. Written on first use; compared exactly thereafter, so a
+# sanitization collision, a copied store directory, or a device_id change
+# is an error instead of a silent account swap.
+matrix_crypto_bind_identity <- function(store, mx) {
+    id <- matrix_crypto_identity(mx)
+    f <- file.path(store, "identity.txt")
+    if (file.exists(f)) {
+        have <- readLines(f, warn = FALSE)
+        want <- c(id[["user_id"]], id[["device_id"]])
+        if (!identical(have[seq_along(want)], want)) {
+            stop("chat.api: crypto store ", store, " belongs to ",
+                 paste(have, collapse = "/"), ", not ",
+                 paste(want, collapse = "/"),
+                 ". Refusing to open another device's Olm account.",
+                 call. = FALSE)
+        }
+        return(invisible(store))
+    }
+    dir.create(store, showWarnings = FALSE, recursive = TRUE)
+    writeLines(c(id[["user_id"]], id[["device_id"]]), f)
+    invisible(store)
 }
 
 # Crypto contexts already built in this session, keyed per identity.
@@ -42,11 +90,18 @@ matrix_crypto_store <- function(app = NULL) {
 # an environment lookup rather than an account load and a 50-key upload.
 .crypto_cache <- new.env(parent = emptyenv())
 
-# The identity a store belongs to, as a cache key. Deliberately not the
-# resolved directory: resolving one calls into mx.client, and a .crypto
-# seam exists precisely so the e2ee paths run without it.
-matrix_crypto_cache_key <- function(store = NULL, app = NULL) {
-    store %||% paste0("app:", app %||% "chat.api")
+# The cache key: the device identity, plus wherever its store was asked
+# for. Deliberately not the resolved directory -- resolving one calls into
+# mx.client, and a .crypto seam exists precisely so the e2ee paths run
+# without it.
+#
+# The identity has to be in the key. Keying on app or store alone had two
+# clients built the documented way, chat_matrix(mx = ..., e2ee = TRUE),
+# collapse onto one "app:chat.api" entry and share an Olm account.
+matrix_crypto_cache_key <- function(store = NULL, app = NULL, mx = NULL) {
+    id <- matrix_crypto_identity(mx)
+    paste(store %||% paste0("app:", app %||% "chat.api"), id[["user_id"]],
+          id[["device_id"]], sep = "\n")
 }
 
 matrix_crypto_context <- function(key, factory) {
@@ -55,6 +110,36 @@ matrix_crypto_context <- function(key, factory) {
     }
     ctx <- factory()
     .crypto_cache[[key]] <- ctx
+    ctx
+}
+
+# The client's crypto context, built on first use.
+#
+# Deliberately not built in chat_matrix(). Initialization publishes keys,
+# which is an authenticated request, and the token on disk may already be
+# rejected at process start -- that is the case mx_with_relogin() exists
+# for. Building at construction put the upload before any relogin could
+# happen, so chat_matrix() threw, corteza's poll loop never got to run,
+# and every restart repeated with the same dead token. Now the context is
+# built after a request has succeeded, off the config that succeeded.
+#
+# The result is stashed on the client's env, which is shared with every
+# copy of the client, so this costs one lookup after the first call.
+matrix_crypto_require <- function(client) {
+    if (!isTRUE(client$e2ee)) {
+        return(NULL)
+    }
+    if (!is.null(client$env$crypto)) {
+        return(client$env$crypto)
+    }
+    mx <- client$env$mx
+    ctx <- matrix_crypto_context(
+                                 matrix_crypto_cache_key(client$crypto_store, client$app, mx),
+                                 function() {
+        client$crypto_ops$init(mx, store = client$crypto_store,
+                               app = client$app)
+    })
+    client$env$crypto <- ctx
     ctx
 }
 
@@ -98,7 +183,8 @@ matrix_crypto_init <- function(mx, store = NULL, app = NULL) {
         stop("Matrix end-to-end encryption requires the 'mx.client' and ",
              "'mx.crypto' packages.", call. = FALSE)
     }
-    store <- store %||% matrix_crypto_store(app = app)
+    store <- store %||% matrix_crypto_store(mx, app = app)
+    matrix_crypto_bind_identity(store, mx)
     acct <- mx.client::mx_crypto_account(store)
     mx.client::mx_crypto_publish_keys(mx, acct, store, n_otks = 50L)
     crypto <- new.env(parent = emptyenv())
@@ -203,6 +289,7 @@ matrix_crypto_decrypt <- function(crypto, sync, mx) {
     } else {
         NULL
     }
+
     res <- mx.client::mx_crypto_process_sync(
         crypto$account, crypto$sessions, sync, crypto$self_curve,
         self_id = mx$user_id, devices = devices)
@@ -211,9 +298,17 @@ matrix_crypto_decrypt <- function(crypto, sync, mx) {
     res$events
 }
 
-# Distinct senders of m.room.encrypted timeline events in this sync, so
-# the device query asks about the people who actually spoke rather than
-# every room member.
+# Distinct senders the device query has to cover, so it asks about the
+# people who actually spoke rather than every room member.
+#
+# Both halves matter, and the to-device half is the one that is easy to
+# miss. sender_bound is stamped once, when a room key arrives over
+# to-device, and it is persisted with the Megolm session; a later sync
+# that finally carries a timeline message from that sender does not rebind
+# it. A room key that arrives in a to-device-only sync -- which is the
+# normal case, since the key is shared before the message -- would
+# therefore be recorded unverified forever, and every message decrypted
+# with it would report sender_verified = FALSE.
 matrix_encrypted_senders <- function(sync) {
     out <- character()
     for (room in sync$rooms$join %||% list()) {
@@ -223,10 +318,22 @@ matrix_encrypted_senders <- function(sync) {
             }
         }
     }
+    for (ev in sync$to_device$events %||% list()) {
+        if (isTRUE(ev$type == "m.room.encrypted") && !is.null(ev$sender)) {
+            out <- c(out, ev$sender)
+        }
+    }
     unique(out)
 }
 
 # Is this room one the adapter knows to be encrypted?
+#
+# Fails closed. A room not already known encrypted is asked about, so one
+# that turned encryption on between polls does not get a cleartext send --
+# and if that question cannot be answered, the caller gets an error rather
+# than FALSE. An expired token, a timeout, or a 500 all used to come back
+# as "not encrypted", which sent the message in the clear: on an E2EE
+# client, unknown is not the same answer as unencrypted.
 matrix_room_is_encrypted <- function(crypto, mx, room_id) {
     if (is.null(crypto)) {
         return(FALSE)
@@ -234,16 +341,19 @@ matrix_room_is_encrypted <- function(crypto, mx, room_id) {
     if (room_id %in% crypto$encrypted) {
         return(TRUE)
     }
-    # Not in the cached set: ask, so a room that turned on encryption
-    # between polls does not get a cleartext send. A failed lookup answers
-    # FALSE, which is the pre-encryption behaviour rather than a hard error.
-    enc <- isTRUE(tryCatch(mx.client::mx_room_encrypted(mx, room_id),
-                           error = function(e) FALSE))
-    if (enc) {
+    enc <- withCallingHandlers(
+                               tryCatch(mx.client::mx_room_encrypted(mx, room_id),
+                                        error = function(e) {
+        stop("chat.api: cannot determine the encryption state of ", room_id,
+             ": ", conditionMessage(e),
+             ". Refusing to send, because an unanswered question is ",
+             "not a plaintext room.", call. = FALSE)
+    }), warning = function(w) invokeRestart("muffleWarning"))
+    if (isTRUE(enc)) {
         crypto$encrypted <- c(crypto$encrypted, room_id)
         matrix_crypto_save_encrypted(crypto)
     }
-    enc
+    isTRUE(enc)
 }
 
 # The m.room.message content an encrypted send wraps. Deliberately the
@@ -267,31 +377,32 @@ matrix_crypto_content <- function(text, msgtype = "m.text", markdown = FALSE,
     content
 }
 
-# Encrypt and send. Returns the event id, or NULL on failure so the
-# caller sees the same "no event id" signal the cleartext path gives.
+# Encrypt and send. Errors propagate, the same way the cleartext path's do
+# -- a caller that wants "no event id" on failure wraps the call, and one
+# that does not should hear about it.
+#
+# Membership discovery is not best-effort. mx_send_encrypted() derives the
+# recipient devices from member_ids, so an empty list means it shares the
+# room key with nobody, posts the m.room.encrypted event anyway, and
+# returns an event id. On a fresh outbound session nobody in the room can
+# read that message, while the caller records a successful send. Swallowing
+# the lookup error bought exactly that outcome, so it is gone: skipping
+# individual devices that cannot be verified is mx.client's decision to
+# make, and it is a different one.
 matrix_crypto_send <- function(crypto, mx, room_id, text, msgtype = "m.text",
                                markdown = FALSE, mentions = NULL) {
-    s <- tryCatch(mx.client::mx_client_session(mx), error = function(e) NULL)
-    members <- if (is.null(s)) {
-        character()
-    } else {
-        tryCatch(mx.api::mx_room_members(s, room_id),
-                 error = function(e) character())
+    members <- mx.api::mx_room_members(mx.client::mx_client_session(mx),
+                                       room_id)
+    if (!length(members)) {
+        stop("chat.api: no members found for ", room_id,
+             ". Refusing to send an encrypted event whose room key would ",
+             "reach nobody.", call. = FALSE)
     }
     content <- matrix_crypto_content(text, msgtype = msgtype,
                                      markdown = markdown, mentions = mentions)
-    res <- tryCatch(
-                    mx.client::mx_send_encrypted(mx, crypto$account, crypto$sessions,
-            room_id, content, crypto$store,
-            member_ids = members),
-                    error = function(e) {
-        warning("chat.api: encrypted send failed: ", conditionMessage(e),
-                call. = FALSE)
-        NULL
-    })
-    if (is.null(res)) {
-        return(NULL)
-    }
+    res <- mx.client::mx_send_encrypted(mx, crypto$account, crypto$sessions,
+                                        room_id, content, crypto$store,
+                                        member_ids = members)
     crypto$sessions <- res$sessions
     res$event_id
 }
