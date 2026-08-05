@@ -132,20 +132,14 @@ matrix_crypto_store_spec <- function(store = NULL, app = NULL) {
 # Windows drive root, turning "C:/" into "C:".
 matrix_normalize_path <- function(p) {
     p <- gsub("\\\\", "/", path.expand(p))
-    root <- ""
-    if (grepl("^[A-Za-z]:/", p)) {
-        root <- substr(p, 1L, 3L)
-        p <- substring(p, 4L)
-    } else if (startsWith(p, "/")) {
-        root <- "/"
-        p <- substring(p, 2L)
-    } else {
+    r <- matrix_path_root(p)
+    if (!nzchar(r[["root"]])) {
         # Relative to wherever the caller stood. Two callers in different
         # directories mean two stores, and saying so beats merging them.
         return(matrix_normalize_path(file.path(gsub("\\\\", "/", getwd()), p)))
     }
     out <- character()
-    for (part in strsplit(p, "/")[[1L]]) {
+    for (part in strsplit(r[["tail"]], "/")[[1L]]) {
         if (!nzchar(part) || identical(part, ".")) {
             next
         }
@@ -158,7 +152,38 @@ matrix_normalize_path <- function(p) {
         }
         out <- c(out, part)
     }
-    paste0(root, paste(out, collapse = "/"))
+    paste0(r[["root"]], paste(out, collapse = "/"))
+}
+
+# Split a path into the root it is anchored to and the rest.
+#
+# The root is not always "/". Collapsing every leading slash run into one
+# made //server/share/x, \\server\share\x and /server/share/x the same
+# spec, and on Windows the first two are a UNC share while the third is a
+# local path -- so a request naming one store would have been handed the
+# context of another, which is the collision the whole check exists to
+# stop. Three or more leading slashes are POSIX, not UNC, and collapse.
+#
+# "C:relative" is drive-relative: Windows resolves it against the current
+# directory *on that drive*, which is not something R can reconstruct
+# portably. It keeps its drive prefix rather than being resolved against
+# getwd(), so it stays distinct from both "C:/relative" and the cwd. A
+# spec that cannot be resolved is better left unmerged than merged wrong.
+matrix_path_root <- function(p) {
+    if (grepl("^//[^/]", p)) {
+        m <- regmatches(p, regexpr("^//[^/]+(/[^/]+)?", p))
+        return(c(root = paste0(m, "/"), tail = substring(p, nchar(m) + 1L)))
+    }
+    if (grepl("^[A-Za-z]:/", p)) {
+        return(c(root = substr(p, 1L, 3L), tail = substring(p, 4L)))
+    }
+    if (grepl("^[A-Za-z]:", p)) {
+        return(c(root = substr(p, 1L, 2L), tail = substring(p, 3L)))
+    }
+    if (startsWith(p, "/")) {
+        return(c(root = "/", tail = substring(p, 2L)))
+    }
+    c(root = "", tail = p)
 }
 
 # One identity, one context, one store. A second store for a device
@@ -258,37 +283,63 @@ matrix_crypto_ops <- function(override = NULL) {
 # is the enforcement, and it is durable because the record it checks
 # against lives on the server rather than in this session.
 #
-# A device the server has never seen is the first-run case and proceeds.
+# Three outcomes, and they have to stay three:
+#
+#   absent            -- first run, proceed and publish
+#   present, valid    -- compare against this account
+#   present, invalid  -- abort
+#
+# The raw /keys/query response is read rather than
+# mx_crypto_known_devices(), which verifies signatures and drops what
+# fails with a warning. That is right for choosing who to encrypt to and
+# wrong here: a tampered or signature-stripped entry for our own device
+# would come back as no entry, collapse "present but unverifiable" into
+# "absent", and publish over it. Another failure read as absence.
+#
+# What this cannot see is a homeserver that omits the device on purpose.
+# That is indistinguishable from a first run over this channel alone, and
+# closing it needs key pinning or cross-signing -- tracked separately.
+#
 # A query that cannot be answered is an error: init is about to publish
 # keys to that same homeserver, so it is not a host we can be off-line
 # from, and the caller retries on the next poll.
 matrix_crypto_check_published <- function(mx, acct) {
     mine <- mx.crypto::mxc_account_identity_keys(acct)
-    devs <- tryCatch(mx.client::mx_crypto_known_devices(mx, mx$user_id),
-                     error = function(e) {
+    uid <- mx$user_id
+    did <- mx$device_id
+    entry <- tryCatch({
+        s <- mx.client::mx_client_session(mx)
+        resp <- mx.api::mx_keys_query(s, device_keys = stats::setNames(
+                list(list()), uid))
+        (resp$device_keys %||% list())[[uid]][[did]]
+    }, error = function(e) {
         stop("chat.api: cannot read this device's published keys from the ",
              "homeserver (", conditionMessage(e), "). Refusing to publish ",
              "an Olm identity that may conflict with one already there.",
              call. = FALSE)
     })
-    for (d in devs) {
-        if (!identical(d$device_id, mx$device_id)) {
-            next
-        }
-        if (identical(d$ed25519, mine$ed25519) &&
-            identical(d$curve25519, mine$curve25519)) {
-            return(invisible(TRUE))
-        }
-        stop("chat.api: the homeserver already has different device keys ",
-             "for ", mx$user_id, "/", mx$device_id, " (ed25519 ",
-             substr(d$ed25519 %||% "", 1L, 12L), "..., this store has ",
-             substr(mine$ed25519 %||% "", 1L, 12L),
-             "...). This store holds another device's Olm account, or the ",
-             "one this device used has been lost. A device has one identity ",
-             "for its lifetime, so log in again for a new device_id rather ",
-             "than republishing under this one.", call. = FALSE)
+    if (is.null(entry)) {
+        return(invisible(TRUE))
     }
-    invisible(TRUE)
+    keys <- tryCatch(mx.crypto::mxc_verify_device_keys(entry, uid, did),
+                     error = function(e) {
+        stop("chat.api: the homeserver has an entry for ", uid, "/", did,
+             " whose device keys do not verify (", conditionMessage(e),
+             "). Refusing to publish over a device record that cannot be ",
+             "checked -- an unverifiable entry is not an absent one.",
+             call. = FALSE)
+    })
+    if (identical(keys$ed25519, mine$ed25519) &&
+        identical(keys$curve25519, mine$curve25519)) {
+        return(invisible(TRUE))
+    }
+    stop("chat.api: the homeserver already has different device keys for ",
+         uid, "/", did, " (ed25519 ", substr(keys$ed25519 %||% "", 1L, 12L),
+         "..., this store has ", substr(mine$ed25519 %||% "", 1L, 12L),
+         "...). This store holds another device's Olm account, or the one ",
+         "this device used has been lost. A device has one identity for its ",
+         "lifetime, so log in again for a new device_id rather than ",
+         "republishing under this one.", call. = FALSE)
 }
 
 # Load or create the account, publish keys, restore sessions and the

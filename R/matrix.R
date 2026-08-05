@@ -66,10 +66,17 @@
 #'   process, one device gets one context and one store, so pointing a
 #'   second store at it is an error rather than a second account. And on
 #'   first use the account's keys are checked against the ones the
-#'   homeserver already has for that \code{device_id} -- which is the
-#'   only one of the three that survives a restart, and so the one that
-#'   catches a store swapped between runs. Log in again for a new
-#'   \code{device_id} rather than re-homing an existing one.
+#'   homeserver already has for that \code{device_id} -- the only one of
+#'   the three that survives a restart, and so the one that catches a
+#'   store swapped between runs. Log in again for a new \code{device_id}
+#'   rather than re-homing an existing one.
+#'
+#'   That last check distinguishes three cases: no published device is a
+#'   first run, a published device whose keys match is this account, and
+#'   a published device that either differs or fails signature
+#'   verification is an error. It cannot see a homeserver that omits the
+#'   device deliberately, which is indistinguishable from a first run
+#'   without key pinning or cross-signing.
 #' @param .sync Testing seam: replacement for
 #'   \code{mx.client::mx_sync_update}. Leave NULL in production.
 #' @param .extract Testing seam: replacement for

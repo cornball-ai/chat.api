@@ -670,6 +670,30 @@ expect_identical(n("C:/x/../y"), "C:/y")
 expect_identical(n("C:\\x\\y"), "C:/x/y")
 # There is nothing above a root to climb to.
 expect_identical(n("/../x"), "/x")
+
+# A UNC share is not the local path that happens to spell the same. On
+# Windows //server/share/x is a remote mount and /server/share/x is a
+# local directory; collapsing every leading slash run made them one spec,
+# so a request for one store would have been handed the other's context.
+expect_identical(n("//server/share/x"), "//server/share/x")
+expect_identical(n("\\\\server\\share\\x"), "//server/share/x")
+expect_false(identical(n("//server/share/x"), n("/server/share/x")))
+# Three or more leading slashes are POSIX, not UNC, and collapse.
+expect_identical(n("///server/share/x"), "/server/share/x")
+# Dot segments fold inside a UNC path, and not past the share.
+expect_identical(n("//server/share/a/../x"), "//server/share/x")
+expect_identical(n("//server/share/../../x"), "//server/share/x")
+# Two shares on one host are two roots.
+expect_false(identical(n("//server/one/x"), n("//server/two/x")))
+
+# "C:relative" is drive-relative -- Windows resolves it against the
+# current directory on that drive, which R cannot reconstruct portably.
+# It keeps its prefix rather than being merged with either the absolute
+# path or the working directory, because a spec that cannot be resolved
+# is better left unmerged than merged wrong.
+expect_identical(n("C:relative"), "C:relative")
+expect_false(identical(n("C:relative"), n("C:/relative")))
+expect_false(identical(n("C:relative"), n("relative")))
 # ~ expands, and a relative path resolves against the caller's directory
 # rather than merging with an unrelated one of the same name.
 expect_true(startsWith(n("~/x"), "/"))
