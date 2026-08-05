@@ -90,26 +90,58 @@ matrix_crypto_bind_identity <- function(store, mx) {
 # an environment lookup rather than an account load and a 50-key upload.
 .crypto_cache <- new.env(parent = emptyenv())
 
-# The cache key: the device identity, plus wherever its store was asked
-# for. Deliberately not the resolved directory -- resolving one calls into
-# mx.client, and a .crypto seam exists precisely so the e2ee paths run
-# without it.
+# The cache key is the device identity and nothing else.
 #
-# The identity has to be in the key. Keying on app or store alone had two
-# clients built the documented way, chat_matrix(mx = ..., e2ee = TRUE),
-# collapse onto one "app:chat.api" entry and share an Olm account.
-matrix_crypto_cache_key <- function(store = NULL, app = NULL, mx = NULL) {
+# Matrix gives a device one long-lived ed25519 and one curve25519 key,
+# for the life of that device_id. So the key cannot include the store:
+# with the store in it, two stores for one device_id minted two Olm
+# accounts and therefore two identity keys for a device the spec says has
+# one -- and two spellings of the same directory produced two mutable
+# contexts over one set of pickles, each overwriting the other's Megolm
+# sessions.
+#
+# identity.txt already enforces store -> identity. This is the other
+# direction, identity -> store, which that file cannot see.
+matrix_crypto_cache_key <- function(mx) {
     id <- matrix_crypto_identity(mx)
-    paste(store %||% paste0("app:", app %||% "chat.api"), id[["user_id"]],
-          id[["device_id"]], sep = "\n")
+    paste(id[["user_id"]], id[["device_id"]], sep = "\n")
 }
 
-matrix_crypto_context <- function(key, factory) {
-    if (!is.null(.crypto_cache[[key]])) {
-        return(.crypto_cache[[key]])
+# A store request, normalized enough that two spellings of one directory
+# are one request. NULL means "derive the default", which is itself a
+# stable request: two clients that both defer resolve the same way.
+#
+# Trailing separators are stripped by hand because normalizePath() leaves
+# a path that does not exist yet exactly as given -- and a store's first
+# use is precisely when it does not exist. For one that does, it also
+# resolves `..` and symlinks, so two routes to one directory collapse.
+matrix_crypto_store_spec <- function(store = NULL, app = NULL) {
+    if (is.null(store)) {
+        return(paste0("app:", app %||% "chat.api"))
+    }
+    p <- path.expand(store)
+    trimmed <- sub("(.)/+$", "\\1", p)
+    normalizePath(trimmed, mustWork = FALSE)
+}
+
+# One identity, one context, one store. A second store for a device
+# already holding one is refused rather than silently ignored or silently
+# honoured: re-homing a device's Olm account is a re-provision, and a
+# re-provisioned device gets a new device_id. matrix_crypto_forget() is
+# the way out for anything that really means to start over.
+matrix_crypto_context <- function(key, spec, factory) {
+    prev <- .crypto_cache[[key]]
+    if (!is.null(prev)) {
+        if (!identical(prev$spec, spec)) {
+            stop("chat.api: this Matrix device already has a crypto store ",
+                 "at ", prev$spec, "; refusing a second at ", spec,
+                 ". A device has one Olm identity, so two stores would be ",
+                 "two identity keys for one device_id.", call. = FALSE)
+        }
+        return(prev$ctx)
     }
     ctx <- factory()
-    .crypto_cache[[key]] <- ctx
+    .crypto_cache[[key]] <- list(ctx = ctx, spec = spec)
     ctx
 }
 
@@ -120,8 +152,14 @@ matrix_crypto_context <- function(key, factory) {
 # rejected at process start -- that is the case mx_with_relogin() exists
 # for. Building at construction put the upload before any relogin could
 # happen, so chat_matrix() threw, corteza's poll loop never got to run,
-# and every restart repeated with the same dead token. Now the context is
-# built after a request has succeeded, off the config that succeeded.
+# and every restart repeated with the same dead token.
+#
+# What waiting buys depends on which call gets here first. From
+# chat_poll() the sync has already run inside mx_with_relogin(), so the
+# keys go up on a token that just worked. From a chat_send() that
+# precedes any poll they go up on whatever token the config holds --
+# nothing wraps a send, so that is the same exposure any direct send
+# already has, and it is still strictly later than the constructor.
 #
 # The result is stashed on the client's env, which is shared with every
 # copy of the client, so this costs one lookup after the first call.
@@ -134,7 +172,8 @@ matrix_crypto_require <- function(client) {
     }
     mx <- client$env$mx
     ctx <- matrix_crypto_context(
-                                 matrix_crypto_cache_key(client$crypto_store, client$app, mx),
+                                 matrix_crypto_cache_key(mx),
+                                 matrix_crypto_store_spec(client$crypto_store, client$app),
                                  function() {
         client$crypto_ops$init(mx, store = client$crypto_store,
                                app = client$app)

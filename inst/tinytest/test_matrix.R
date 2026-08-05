@@ -634,18 +634,39 @@ expect_error(chat_matrix(mx = list(device_id = "DEV1"), e2ee = TRUE,
 # e2ee off does not need one: a cleartext client has no account to key.
 expect_silent(seam_client(mx = list(user_id = "@bot:ex")))
 
-# The cache key carries the identity. Keying on app or store alone had two
-# clients built the documented way -- chat_matrix(mx = ..., e2ee = TRUE)
-# with no app and no store -- collapse onto one entry and share an account.
+# The cache key is the device identity and nothing else. Matrix gives a
+# device one ed25519 and one curve25519 key for the life of that
+# device_id, so a key that also carried the store let two stores mint two
+# Olm accounts -- two identity keys for one device.
 k <- chat.api:::matrix_crypto_cache_key
-expect_false(identical(k(NULL, NULL, fake_mx(user_id = "@a:ex")),
-                       k(NULL, NULL, fake_mx(user_id = "@b:ex"))))
-expect_false(identical(k(NULL, NULL, fake_mx(device_id = "D1")),
-                       k(NULL, NULL, fake_mx(device_id = "D2"))))
-expect_false(identical(k("/s", NULL, fake_mx(device_id = "D1")),
-                       k("/s", NULL, fake_mx(device_id = "D2"))))
-expect_identical(k(NULL, NULL, fake_mx()), k(NULL, NULL, fake_mx()))
-expect_false(identical(k(NULL, "a", fake_mx()), k(NULL, "b", fake_mx())))
+expect_false(identical(k(fake_mx(user_id = "@a:ex")),
+                       k(fake_mx(user_id = "@b:ex"))))
+expect_false(identical(k(fake_mx(device_id = "D1")),
+                       k(fake_mx(device_id = "D2"))))
+expect_identical(k(fake_mx()), k(fake_mx()))
+# Same device, different token or cursor: still one key.
+expect_identical(k(fake_mx(sync_token = "s1")), k(fake_mx()))
+
+# Store requests normalize, so two spellings of one directory are one
+# request rather than two contexts writing over each other's pickles.
+spec <- chat.api:::matrix_crypto_store_spec
+expect_identical(spec("/tmp/store-a"), spec("/tmp/store-a/"))
+expect_identical(spec("/tmp/store-a"), spec("/tmp/store-a///"))
+expect_false(identical(spec("/tmp/store-a"), spec("/tmp/store-b")))
+# Root survives the trailing-slash strip rather than becoming "".
+expect_true(nzchar(spec("/")))
+# For a directory that exists, `..` and symlinks collapse too.
+local({
+    d <- file.path(tempfile("specdir"), "s")
+    dir.create(d, recursive = TRUE)
+    on.exit(unlink(dirname(d), recursive = TRUE))
+    expect_identical(spec(d), spec(file.path(dirname(d), "..",
+                                             basename(dirname(d)), "s")))
+})
+# A deferred store is a stable request too: two clients that both defer
+# resolve the same way, and the app is what distinguishes them.
+expect_identical(spec(NULL), spec(NULL))
+expect_false(identical(spec(NULL, "a"), spec(NULL, "b")))
 
 # Two default clients for different bots get two contexts.
 f <- fake_crypto()
@@ -669,31 +690,53 @@ chat_poll(b)
 expect_identical(length(f$log$init), 1L)
 expect_true(identical(a$env$crypto, b$env$crypto))
 
-# An explicit crypto_store keys on the store plus the identity, so two
-# stores are two contexts and one store is one.
+# One explicit store, asked for twice, is one context -- including when
+# the second spelling of it differs.
 f <- fake_crypto()
 chat_send(seam_client(e2ee = TRUE, crypto_store = "/tmp/store-a",
                       .crypto = f$ops), "!enc:ex", "x")
-chat_send(seam_client(e2ee = TRUE, crypto_store = "/tmp/store-a",
+chat_send(seam_client(e2ee = TRUE, crypto_store = "/tmp/store-a/",
                       .crypto = f$ops), "!enc:ex", "x")
-chat_send(seam_client(e2ee = TRUE, crypto_store = "/tmp/store-b",
-                      .crypto = f$ops), "!enc:ex", "x")
-expect_identical(length(f$log$init), 2L)
-expect_identical(f$log$init[[1L]]$store, "/tmp/store-a")
-expect_identical(f$log$init[[2L]]$store, "/tmp/store-b")
+expect_identical(length(f$log$init), 1L)
 
-# Forgetting one identity leaves the others interned.
+# A second store for a device that already has one is refused. Two stores
+# would be two Olm accounts, and the spec gives a device_id one identity.
+# It is not silently ignored either: the caller asked for a store and
+# would otherwise have got a different one without being told.
+expect_error(chat_send(seam_client(e2ee = TRUE, crypto_store = "/tmp/store-b",
+                                   .crypto = f$ops), "!enc:ex", "x"),
+             "already has a crypto store")
+expect_identical(length(f$log$init), 1L)
+# The default store and an explicit one conflict the same way.
+expect_error(chat_poll(seam_client(e2ee = TRUE, .crypto = f$ops)),
+             "already has a crypto store")
+
+# A different app is a different store, so on the same device it
+# conflicts too. In production it does not arise: cornelius and tiny are
+# different user_ids, hence different devices.
 f <- fake_crypto()
-one <- seam_client(e2ee = TRUE, app = "cornelius", .crypto = f$ops)
-two <- seam_client(e2ee = TRUE, app = "tiny", .crypto = f$ops)
-chat_poll(one)
-chat_poll(two)
-chat.api:::matrix_crypto_forget(
-    chat.api:::matrix_crypto_cache_key(NULL, "tiny", fake_mx()))
 chat_poll(seam_client(e2ee = TRUE, app = "cornelius", .crypto = f$ops))
-chat_poll(seam_client(e2ee = TRUE, app = "tiny", .crypto = f$ops))
+expect_error(chat_poll(seam_client(e2ee = TRUE, app = "tiny",
+                                   .crypto = f$ops)),
+             "already has a crypto store")
+
+# Forgetting an identity is how to re-home one deliberately, and it
+# leaves the other identities interned.
+f <- fake_crypto()
+one <- fake_mx(user_id = "@one:ex")
+two <- fake_mx(user_id = "@two:ex")
+chat_poll(seam_client(e2ee = TRUE, .crypto = f$ops, mx = one))
+chat_poll(seam_client(e2ee = TRUE, .crypto = f$ops, mx = two))
+chat.api:::matrix_crypto_forget(chat.api:::matrix_crypto_cache_key(two))
+chat_poll(seam_client(e2ee = TRUE, .crypto = f$ops, mx = one))
+chat_poll(seam_client(e2ee = TRUE, .crypto = f$ops, mx = two))
 expect_identical(length(f$log$init), 3L)
-expect_identical(f$log$init[[3L]]$app, "tiny")
+expect_identical(f$log$init[[3L]]$mx$user_id, "@two:ex")
+# ... and after forgetting, a new store for that device is allowed.
+chat.api:::matrix_crypto_forget(chat.api:::matrix_crypto_cache_key(one))
+chat_send(seam_client(e2ee = TRUE, crypto_store = "/tmp/rehomed",
+                      .crypto = f$ops, mx = one), "!enc:ex", "x")
+expect_identical(f$log$init[[length(f$log$init)]]$store, "/tmp/rehomed")
 
 # ---- Encrypted sends ----
 
