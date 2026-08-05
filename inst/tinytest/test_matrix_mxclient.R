@@ -683,6 +683,41 @@ if (requireNamespace("mx.crypto", quietly = TRUE)) {
         unlink(store, recursive = TRUE)
     })
 
+    # /keys/query answers 200 with a `failures` map when it could not
+    # reach a server, and returns whatever it did manage. This query names
+    # one user -- ours -- so any failure means the question went
+    # unanswered, and the empty device_keys beside it is not evidence of a
+    # device that was never published. A request that throws and one that
+    # succeeds with nothing in it are the same state here.
+    local({
+        uploads <- 0L
+        o <- init_stubs(function(...) list(
+            failures = list(ex = list(errcode = "M_UNKNOWN",
+                                      error = "Failed to fetch keys")),
+            device_keys = list()))
+        assignInNamespace("mx_crypto_publish_keys",
+                          function(...) { uploads <<- uploads + 1L
+                                          invisible(TRUE) }, ns = "mx.client")
+        on.exit(restore_stubs(o))
+        store <- tempfile("pub9")
+        expect_error(chat.api:::matrix_crypto_init(me, store = store),
+                     "could not answer for ex")
+        expect_identical(uploads, 0L)
+        unlink(store, recursive = TRUE)
+    })
+
+    # An empty failures map is not a failure: that is the ordinary
+    # first-run answer and must not start erroring.
+    local({
+        o <- init_stubs(function(...) list(failures = list(),
+                                           device_keys = list()))
+        on.exit(restore_stubs(o))
+        store <- tempfile("pub10")
+        expect_true(is.environment(chat.api:::matrix_crypto_init(me,
+                                                                 store = store)))
+        unlink(store, recursive = TRUE)
+    })
+
     # The check runs before the upload, so a mismatch never publishes.
     local({
         uploads <- 0L

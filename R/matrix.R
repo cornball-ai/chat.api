@@ -74,9 +74,18 @@
 #'   That last check distinguishes three cases: no published device is a
 #'   first run, a published device whose keys match is this account, and
 #'   a published device that either differs or fails signature
-#'   verification is an error. It cannot see a homeserver that omits the
-#'   device deliberately, which is indistinguishable from a first run
-#'   without key pinning or cross-signing.
+#'   verification is an error. A \code{/keys/query} that returns a
+#'   \code{failures} map is an error too, since the empty result beside
+#'   it is an unanswered question rather than an absent device. It cannot
+#'   see a homeserver that omits the device deliberately, which is
+#'   indistinguishable from a first run without key pinning or
+#'   cross-signing.
+#'
+#'   A Windows drive-relative \code{crypto_store} (\code{"C:store"}) is
+#'   rejected. It names a directory relative to the current directory of
+#'   that drive, which cannot be read here, so two such paths cannot be
+#'   told apart and two stores could share one context. Pass an absolute
+#'   path.
 #' @param .sync Testing seam: replacement for
 #'   \code{mx.client::mx_sync_update}. Leave NULL in production.
 #' @param .extract Testing seam: replacement for

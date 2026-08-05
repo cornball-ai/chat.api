@@ -686,14 +686,19 @@ expect_identical(n("//server/share/../../x"), "//server/share/x")
 # Two shares on one host are two roots.
 expect_false(identical(n("//server/one/x"), n("//server/two/x")))
 
-# "C:relative" is drive-relative -- Windows resolves it against the
-# current directory on that drive, which R cannot reconstruct portably.
-# It keeps its prefix rather than being merged with either the absolute
-# path or the working directory, because a spec that cannot be resolved
-# is better left unmerged than merged wrong.
-expect_identical(n("C:relative"), "C:relative")
-expect_false(identical(n("C:relative"), n("C:/relative")))
-expect_false(identical(n("C:relative"), n("relative")))
+# A drive-relative path is refused rather than folded. Windows resolves
+# "C:store" against the current directory of drive C, which R cannot
+# read, so "C:../x", "C:x" and "C:a/../../x" are three directories that
+# no amount of folding here can tell apart -- and two of them sharing a
+# spec is two stores sharing a context.
+expect_error(n("C:relative"), "drive-relative")
+expect_error(n("C:../x"), "drive-relative")
+expect_error(n("C:a/../../x"), "drive-relative")
+expect_error(n("C:"), "drive-relative")
+expect_error(n("c:store"), "drive-relative")
+expect_error(spec("C:relative"), "drive-relative")
+# An absolute drive path is fine, and is what the error asks for.
+expect_identical(n("C:/relative"), "C:/relative")
 # ~ expands, and a relative path resolves against the caller's directory
 # rather than merging with an unrelated one of the same name.
 expect_true(startsWith(n("~/x"), "/"))

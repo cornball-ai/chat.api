@@ -132,6 +132,21 @@ matrix_crypto_store_spec <- function(store = NULL, app = NULL) {
 # Windows drive root, turning "C:/" into "C:".
 matrix_normalize_path <- function(p) {
     p <- gsub("\\\\", "/", path.expand(p))
+    # "C:store" is drive-relative: Windows resolves it against the current
+    # directory *on drive C*, which R cannot read and this cannot fold.
+    # Treating "C:" as a root made "C:../x", "C:x" and "C:a/../../x" one
+    # spec when they are three different directories, so two stores could
+    # still share a context. Keeping unresolved leading ".." would make
+    # the spec honest and still not canonical -- two spellings of one
+    # directory would stay two. There is no correct answer available, so
+    # this asks for one that is.
+    if (grepl("^[A-Za-z]:([^/]|$)", p)) {
+        stop("chat.api: crypto_store cannot be a Windows drive-relative ",
+             "path (", p, "). It names a directory that depends on the ",
+             "current directory of that drive, which cannot be resolved ",
+             "here, so two such paths cannot be told apart. Give an ",
+             "absolute path, like C:/store.", call. = FALSE)
+    }
     r <- matrix_path_root(p)
     if (!nzchar(r[["root"]])) {
         # Relative to wherever the caller stood. Two callers in different
@@ -164,11 +179,8 @@ matrix_normalize_path <- function(p) {
 # context of another, which is the collision the whole check exists to
 # stop. Three or more leading slashes are POSIX, not UNC, and collapse.
 #
-# "C:relative" is drive-relative: Windows resolves it against the current
-# directory *on that drive*, which is not something R can reconstruct
-# portably. It keeps its drive prefix rather than being resolved against
-# getwd(), so it stays distinct from both "C:/relative" and the cwd. A
-# spec that cannot be resolved is better left unmerged than merged wrong.
+# Drive-relative paths never reach here: matrix_normalize_path() rejects
+# them, because "C:" is a drive and not a root to fold components against.
 matrix_path_root <- function(p) {
     if (grepl("^//[^/]", p)) {
         m <- regmatches(p, regexpr("^//[^/]+(/[^/]+)?", p))
@@ -176,9 +188,6 @@ matrix_path_root <- function(p) {
     }
     if (grepl("^[A-Za-z]:/", p)) {
         return(c(root = substr(p, 1L, 3L), tail = substring(p, 4L)))
-    }
-    if (grepl("^[A-Za-z]:", p)) {
-        return(c(root = substr(p, 1L, 2L), tail = substring(p, 3L)))
     }
     if (startsWith(p, "/")) {
         return(c(root = "/", tail = substring(p, 2L)))
@@ -307,17 +316,31 @@ matrix_crypto_check_published <- function(mx, acct) {
     mine <- mx.crypto::mxc_account_identity_keys(acct)
     uid <- mx$user_id
     did <- mx$device_id
-    entry <- tryCatch({
+    resp <- tryCatch({
         s <- mx.client::mx_client_session(mx)
-        resp <- mx.api::mx_keys_query(s, device_keys = stats::setNames(
-                list(list()), uid))
-        (resp$device_keys %||% list())[[uid]][[did]]
+        mx.api::mx_keys_query(s,
+                              device_keys = stats::setNames(list(list()), uid))
     }, error = function(e) {
         stop("chat.api: cannot read this device's published keys from the ",
              "homeserver (", conditionMessage(e), "). Refusing to publish ",
              "an Olm identity that may conflict with one already there.",
              call. = FALSE)
     })
+    # /keys/query answers 200 with a `failures` map when it could not
+    # reach a server, and the device_keys it returns are whatever it did
+    # manage. This query names one user -- ours -- so any failure at all
+    # means our question went unanswered, and the empty result that comes
+    # back with it is not evidence of a device that was never published.
+    # A request that throws and a request that succeeds with nothing in it
+    # are the same state to a caller about to publish keys.
+    if (length(resp$failures)) {
+        stop("chat.api: the homeserver could not answer for ",
+             paste(names(resp$failures), collapse = ", "),
+             " when asked about this device's published keys. Refusing to ",
+             "publish an Olm identity against an unanswered question.",
+             call. = FALSE)
+    }
+    entry <- (resp$device_keys %||% list())[[uid]][[did]]
     if (is.null(entry)) {
         return(invisible(TRUE))
     }
