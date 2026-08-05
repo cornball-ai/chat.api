@@ -3,9 +3,21 @@
 \alias{chat_matrix}
 \title{Create a Matrix chat client}
 \usage{
-chat_matrix(app = NULL, path = NULL, save_cursor = TRUE, mx = NULL,
-            relogin = TRUE, .sync = NULL, .extract = NULL, .send = NULL,
-            .media = NULL, .typing = NULL)
+chat_matrix(
+  app = NULL,
+  path = NULL,
+  save_cursor = TRUE,
+  mx = NULL,
+  relogin = TRUE,
+  e2ee = FALSE,
+  crypto_store = NULL,
+  .sync = NULL,
+  .extract = NULL,
+  .send = NULL,
+  .media = NULL,
+  .typing = NULL,
+  .crypto = NULL
+)
 }
 \arguments{
 \item{app}{Application namespace passed to
@@ -37,6 +49,23 @@ refreshed config lands back in the client, so the next poll and any
 send use the new token. FALSE lets \code{mx_error_M_UNKNOWN_TOKEN}
 propagate.}
 
+\item{e2ee}{Logical. Own Olm/Megolm state in the adapter, so
+\code{\link{chat_send}} encrypts for rooms that advertise
+\code{m.room.encryption} and \code{\link{chat_poll}} decrypts
+inbound. FALSE (the default) is the previous behaviour exactly:
+cleartext only, no crypto state, and \code{e2ee} stays FALSE in
+\code{\link{chat_capabilities}}. Requires the 'mx.crypto' package,
+which needs a Rust toolchain.}
+
+\item{crypto_store}{Character or NULL. Directory holding the pickled
+Olm account and sessions. NULL derives it from \code{app} via
+\code{mx.client::mx_crypto_store_dir()}, which keys one store per
+app namespace regardless of where the config file lives, so moving a
+config does not cost the device identity. Because that key is the app
+name alone, an \code{e2ee = TRUE} client built from an explicit
+\code{path} with no \code{app} is an error: name one or the other, or
+two such clients would quietly share a device identity.}
+
 \item{.sync}{Testing seam: replacement for
 \code{mx.client::mx_sync_update}. Leave NULL in production.}
 
@@ -56,6 +85,14 @@ without mx.client installed; \code{chat_typing()} and
 \code{mx.api::mx_typing}. Leave NULL in production. It is resolved
 when \code{chat_typing()} is called, not here, so a NULL seam costs
 nothing on installs without mx.api.}
+
+\item{.crypto}{Testing seam: a named list overriding any of the
+adapter's four crypto operations -- \code{init}, \code{encrypted},
+\code{send}, \code{decrypt}. Leave NULL in production. Supplying
+\code{init} is what lets \code{e2ee = TRUE} be tested on a runner
+with neither mx.crypto nor a Rust toolchain; E2EE is the one part of
+this adapter with no honest way to reach a real homeserver from a
+test.}
 }
 \value{
 A \code{chat_client} of class \code{chat_matrix}.

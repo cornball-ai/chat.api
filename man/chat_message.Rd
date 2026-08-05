@@ -3,8 +3,21 @@
 \alias{chat_message}
 \title{Construct a normalized chat message}
 \usage{
-chat_message(id, channel, sender, body, ts, thread = NULL, markup = "plain",
-             kind = "message", self = NULL, mentions = NULL, raw = NULL)
+chat_message(
+  id,
+  channel,
+  sender,
+  body,
+  ts,
+  thread = NULL,
+  markup = "plain",
+  kind = "message",
+  self = NULL,
+  mentions = NULL,
+  raw = NULL,
+  encrypted = FALSE,
+  sender_verified = NULL
+)
 }
 \arguments{
 \item{id}{Message identifier (character).}
@@ -46,6 +59,18 @@ exactly as the transport layer handed it over. Shape is
 adapter-specific and may already be normalized by the transport
 package (Matrix hands over an extracted record, not the timeline
 event), so it is an escape hatch, not a guarantee of completeness.}
+
+\item{encrypted}{Logical: did this message arrive end-to-end
+encrypted? FALSE on transports without E2EE and on cleartext
+messages in rooms that have it.}
+
+\item{sender_verified}{Logical: does the sender identifier bind to a
+device whose keys this client verified? NULL on cleartext messages,
+where the transport asserts the sender and there is nothing to
+verify. On an encrypted message FALSE is a real answer, not a
+missing one: the payload decrypted, but its claimed sender could not
+be tied to a verified device, so the identifier is the homeserver's
+word rather than cryptographic fact.}
 }
 \value{
 A list with class \code{chat_message}.

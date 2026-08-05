@@ -3,9 +3,19 @@
 \alias{chat_send}
 \title{Send a message through a chat client}
 \usage{
-chat_send(client, channel, text, markup = c("plain", "markdown"),
-          thread = NULL, reply_to = NULL, identity = NULL, files = NULL,
-          kind = "message", notify = TRUE, ...)
+chat_send(
+  client,
+  channel,
+  text,
+  markup = c("plain", "markdown"),
+  thread = NULL,
+  reply_to = NULL,
+  identity = NULL,
+  files = NULL,
+  kind = "message",
+  notify = TRUE,
+  ...
+)
 }
 \arguments{
 \item{client}{A \code{chat_client}.}
@@ -37,7 +47,13 @@ supported.}
 \item{...}{Adapter-specific options.}
 }
 \value{
-The sent message id (character), invisibly.
+Character vector of the message ids this call created, in the
+  order they were sent, invisibly. Usually length one. A platform that
+  splits a send into several events returns one id per event: the
+  Matrix adapter sends each attachment as its own event, so a send
+  with files returns the attachment ids followed by the text id.
+  Callers that track their own traffic by id must handle every
+  element, or an unclaimed event reads as somebody else's message.
 }
 \description{
 Send a message through a chat client

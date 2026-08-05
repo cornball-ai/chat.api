@@ -3,8 +3,13 @@
 \alias{chat_slack}
 \title{Create a Slack chat client}
 \usage{
-chat_slack(channels = character(), token = Sys.getenv("SLACK_TOKEN"),
-           username = NULL, .history = NULL, .post = NULL)
+chat_slack(
+  channels = character(),
+  token = Sys.getenv("SLACK_TOKEN"),
+  username = NULL,
+  .history = NULL,
+  .post = NULL
+)
 }
 \arguments{
 \item{channels}{Character vector of channels to poll.}
