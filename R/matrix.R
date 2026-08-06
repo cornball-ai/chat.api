@@ -116,6 +116,11 @@
 #'   Leave NULL in production. Resolved when \code{chat_react()} is
 #'   called, not here, so a NULL seam costs nothing on installs without
 #'   mx.api.
+#' @param .info Testing seam: a list with \code{name} and \code{topic},
+#'   replacing \code{mx.api::mx_room_name} and
+#'   \code{mx.api::mx_room_topic}. Leave NULL in production.
+#' @param .members Testing seam: replacement for
+#'   \code{mx.api::mx_room_members}. Leave NULL in production.
 #' @return A \code{chat_client} of class \code{chat_matrix}.
 #'   \code{\link{chat_poll}} on this class returns \code{first_run} and
 #'   \code{client} alongside \code{messages}, \code{cursor}, and
@@ -130,7 +135,8 @@ chat_matrix <- function(app = NULL, path = NULL, save_cursor = TRUE,
                         mx = NULL, relogin = TRUE, e2ee = FALSE,
                         crypto_store = NULL, .sync = NULL, .extract = NULL,
                         .send = NULL, .media = NULL, .typing = NULL,
-                        .crypto = NULL, .save = NULL, .react = NULL) {
+                        .crypto = NULL, .save = NULL, .react = NULL,
+                        .info = NULL, .members = NULL) {
     seams <- list(.sync, .extract, .send, .media)
     if ((is.null(mx) || any(vapply(seams, is.null, logical(1)))) &&
         !requireNamespace("mx.client", quietly = TRUE)) {
@@ -183,6 +189,7 @@ chat_matrix <- function(app = NULL, path = NULL, save_cursor = TRUE,
                    # on the deferred-save path, which only e2ee reaches.
                    save_fn = .save,
                    typing_fn = .typing, react_fn = .react,
+                   info_fn = .info, members_fn = .members,
                    crypto_ops = matrix_crypto_ops(.crypto)),
               class = c("chat_matrix", "chat_client"))
 }
@@ -541,6 +548,36 @@ chat_react.chat_matrix <- function(client, channel, message_id, key, ...) {
 }
 
 #' @export
+chat_channel_info.chat_matrix <- function(client, channel, ...) {
+    s <- mx.client::mx_client_session(client$env$mx)
+    info <- client$info_fn %||% list(name = mx.api::mx_room_name,
+                                     topic = mx.api::mx_room_topic)
+    # A room with neither is the ordinary case for a direct message, and
+    # mx.api raises M_NOT_FOUND for an absent state event. That is the
+    # answer "there is none", not a failure, so it becomes NULL -- which
+    # is what the contract says a missing field means. A room the client
+    # cannot reach at all fails earlier, in mx_client_session().
+    absent <- function(f) {
+        v <- tryCatch(f(s, channel), error = function(e) NULL)
+        if (is.null(v) || !length(v) || !nzchar(v[[1L]])) {
+            NULL
+        } else {
+            as.character(v)[[1L]]
+        }
+    }
+    list(id = channel, name = absent(info$name), topic = absent(info$topic))
+}
+
+#' @export
+chat_members.chat_matrix <- function(client, channel, ...) {
+    # Errors propagate. An empty room and an unanswerable question are
+    # different things, and character() has to mean only the first.
+    members_fn <- client$members_fn %||% mx.api::mx_room_members
+    as.character(members_fn(mx.client::mx_client_session(client$env$mx),
+                            channel))
+}
+
+#' @export
 chat_resolve.chat_matrix <- function(client, name, ...) {
     mx.client::mx_resolve_room(client$env$mx, name)
 }
@@ -588,9 +625,9 @@ chat_capabilities.chat_matrix <- function(client, ...) {
     # that fails in exactly the rooms such a client exists for.
     list(threads = FALSE, thread_replies = FALSE, edits = FALSE,
          reactions = TRUE, reaction_events = matrix_reactions_available(),
-         files = !isTRUE(client$e2ee), typing = TRUE,
-         e2ee = isTRUE(client$e2ee), identity_override = FALSE,
-         markup_dialects = c("plain", "markdown"),
+         channel_info = TRUE, members = TRUE, files = !isTRUE(client$e2ee),
+         typing = TRUE, e2ee = isTRUE(client$e2ee),
+         identity_override = FALSE, markup_dialects = c("plain", "markdown"),
          max_message_bytes = NA_integer_)
 }
 

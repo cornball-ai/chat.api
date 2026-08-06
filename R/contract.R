@@ -93,8 +93,10 @@ chat_resolve <- function(client, name, ...) {
 #'   threads), \code{thread_replies} (thread replies come back out of
 #'   \code{\link{chat_poll}}), \code{edits}, \code{reactions}
 #'   (\code{\link{chat_react}} works), \code{reaction_events} (reactions
-#'   come back out of \code{\link{chat_poll}}), \code{files},
-#'   \code{typing}, \code{e2ee}, \code{identity_override} (logicals),
+#'   come back out of \code{\link{chat_poll}}), \code{channel_info}
+#'   (\code{\link{chat_channel_info}} works), \code{members}
+#'   (\code{\link{chat_members}} works), \code{files}, \code{typing},
+#'   \code{e2ee}, \code{identity_override} (logicals),
 #'   \code{markup_dialects} (character), \code{max_message_bytes}
 #'   (integer or NA).
 #'
@@ -145,6 +147,68 @@ chat_react.default <- function(client, channel, message_id, key, ...) {
     stop("chat_react() is not supported by this adapter (",
          paste(class(client), collapse = "/"),
          "). Check chat_capabilities()$reactions.", call. = FALSE)
+}
+
+#' Describe a channel
+#'
+#' Returns the channel's descriptive metadata: what it is called and what
+#' it is for.
+#'
+#' Membership is deliberately not here, and \code{\link{chat_members}} is
+#' a separate verb. The two look like one lookup and are not: a name and
+#' a topic are two short strings that change rarely, while a member list
+#' is unbounded and changes constantly. Bundling them makes every read of
+#' a topic pay for a member list, which on a busy room is the expensive
+#' part -- and a consumer caches the two on different schedules for
+#' exactly that reason.
+#'
+#' A NULL field means the channel has no such thing: a Matrix room with
+#' no \code{m.room.name} really has no name. An adapter that cannot
+#' answer at all throws, so "cannot ask" and "asked, and there is none"
+#' stay distinguishable. Check \code{chat_capabilities()$channel_info}
+#' first.
+#'
+#' @param client A \code{chat_client}.
+#' @param channel Channel/room identifier.
+#' @param ... Adapter-specific options.
+#' @return A list with \code{id}, \code{name}, and \code{topic}.
+#'   \code{id} is the channel as the platform addresses it; \code{name}
+#'   and \code{topic} are character or NULL.
+#' @export
+chat_channel_info <- function(client, channel, ...) {
+    UseMethod("chat_channel_info")
+}
+
+#' @export
+chat_channel_info.default <- function(client, channel, ...) {
+    stop("chat_channel_info() is not supported by this adapter (",
+         paste(class(client), collapse = "/"),
+         "). Check chat_capabilities()$channel_info.", call. = FALSE)
+}
+
+#' List a channel's members
+#'
+#' Separate from \code{\link{chat_channel_info}} because it is the
+#' expensive half: a member list is unbounded where a name and a topic
+#' are two short strings, and it goes stale on a different schedule.
+#'
+#' @param client A \code{chat_client}.
+#' @param channel Channel/room identifier.
+#' @param ... Adapter-specific options.
+#' @return Character vector of member identifiers. Empty when the channel
+#'   has none; an adapter that cannot answer throws, so an empty room is
+#'   never confused with an unanswerable question. Check
+#'   \code{chat_capabilities()$members} first.
+#' @export
+chat_members <- function(client, channel, ...) {
+    UseMethod("chat_members")
+}
+
+#' @export
+chat_members.default <- function(client, channel, ...) {
+    stop("chat_members() is not supported by this adapter (",
+         paste(class(client), collapse = "/"),
+         "). Check chat_capabilities()$members.", call. = FALSE)
 }
 
 #' Construct a normalized reaction record

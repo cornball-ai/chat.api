@@ -9,7 +9,8 @@ chat_slack(
   username = NULL,
   .history = NULL,
   .post = NULL,
-  .react = NULL
+  .react = NULL,
+  .api = NULL
 )
 }
 \arguments{
@@ -31,6 +32,11 @@ seams are supplied the slackr package is not required.}
 \item{.react}{Testing seam: replacement for
 \code{slackr::call_slack_api}. Leave NULL in production. Resolved
 when \code{chat_react()} is called, not here.}
+
+\item{.api}{Testing seam: replacement for
+\code{slackr::call_slack_api} on the read paths
+(\code{chat_channel_info()}, \code{chat_members()}). Leave NULL in
+production.}
 }
 \value{
 A \code{chat_client} of class \code{chat_slack}.

@@ -15,8 +15,10 @@ A list with at least: \code{threads} (can post into
   threads), \code{thread_replies} (thread replies come back out of
   \code{\link{chat_poll}}), \code{edits}, \code{reactions}
   (\code{\link{chat_react}} works), \code{reaction_events} (reactions
-  come back out of \code{\link{chat_poll}}), \code{files},
-  \code{typing}, \code{e2ee}, \code{identity_override} (logicals),
+  come back out of \code{\link{chat_poll}}), \code{channel_info}
+  (\code{\link{chat_channel_info}} works), \code{members}
+  (\code{\link{chat_members}} works), \code{files}, \code{typing},
+  \code{e2ee}, \code{identity_override} (logicals),
   \code{markup_dialects} (character), \code{max_message_bytes}
   (integer or NA).
 

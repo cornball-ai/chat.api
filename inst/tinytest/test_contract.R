@@ -93,3 +93,41 @@ local({
     expect_true(slack$reactions)
     expect_false(slack$reaction_events)
 })
+
+# ---- Every adapter answers the channel-metadata pair ----
+# Same rule as the reaction flags: a flag one adapter reports and another
+# omits gives a consumer NULL, and NULL is not FALSE.
+local({
+    for (adapter in c("chat_loopback", "chat_irc", "chat_slack",
+                      "chat_matrix")) {
+        m <- getS3method("chat_capabilities", adapter)
+        caps <- m(structure(list(env = new.env()), class = adapter))
+        for (flag in c("channel_info", "members")) {
+            expect_true(flag %in% names(caps), info = paste(adapter, flag))
+            expect_true(is.logical(caps[[flag]]) && length(caps[[flag]]) == 1L,
+                        info = paste(adapter, flag))
+            expect_false(is.na(caps[[flag]]), info = paste(adapter, flag))
+        }
+    }
+})
+
+# An adapter that cannot answer refuses, so "cannot ask" stays distinct
+# from "asked, and there is none" -- which is the whole reason a missing
+# name is NULL rather than an error.
+local({
+    lo <- chat_loopback()
+    expect_false(chat_capabilities(lo)$channel_info)
+    expect_false(chat_capabilities(lo)$members)
+    expect_error(chat_channel_info(lo, "c"), "not supported by this adapter")
+    expect_error(chat_members(lo, "c"), "not supported by this adapter")
+})
+
+# Membership is its own verb, not a field on channel info. The two go
+# stale on different schedules and one of them is unbounded, so a
+# consumer reading a topic must not pay for a member list.
+local({
+    m <- getS3method("chat_capabilities", "chat_matrix")
+    caps <- m(structure(list(env = new.env()), class = "chat_matrix"))
+    expect_true(caps$channel_info && caps$members)
+    expect_false("members" %in% names(formals(chat_channel_info)))
+})
