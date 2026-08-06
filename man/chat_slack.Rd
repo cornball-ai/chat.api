@@ -8,7 +8,8 @@ chat_slack(
   token = Sys.getenv("SLACK_TOKEN"),
   username = NULL,
   .history = NULL,
-  .post = NULL
+  .post = NULL,
+  .react = NULL
 )
 }
 \arguments{
@@ -26,6 +27,10 @@ environment variable.}
 \item{.post}{Testing seam: replacement for
 \code{slackr::slackr_msg}. Leave NULL in production; when both
 seams are supplied the slackr package is not required.}
+
+\item{.react}{Testing seam: replacement for
+\code{slackr::call_slack_api}. Leave NULL in production. Resolved
+when \code{chat_react()} is called, not here.}
 }
 \value{
 A \code{chat_client} of class \code{chat_slack}.

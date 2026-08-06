@@ -163,3 +163,110 @@ expect_true(as.numeric(s1$cursor$lab) >= t_now - 1)
 s2 <- chat_poll(cl2)
 expect_identical(length(s2$messages), 1L)
 expect_identical(s2$messages[[1L]]$body, "fresh message")
+
+# ---- Reactions ----
+# Implemented here as well as on Matrix, in the same change as the
+# generic: an interface with one implementer is a shape traced around
+# that implementer. Slack is what proves this one is not Matrix-shaped.
+#
+# The seam mirrors call_slack_api()'s real signature, `body` and all.
+# An earlier version took `...` and asserted on what arrived there, which
+# passed while production sent an empty POST: slackr feeds `...` to the
+# query string on GET and ignores it on POST. A seam whose shape differs
+# from the function it stands in for tests the seam.
+
+slack_react_client <- function(react) {
+    chat_slack(channels = "lab", token = "xoxb-test",
+               .history = function(...) NULL, .post = function(...) "1.1",
+               .react = react)
+}
+ok_resp <- structure(list(), class = "response")
+
+local({
+    seen <- NULL
+    cl <- slack_react_client(function(path, ..., body = NULL, .method, token) {
+        seen <<- list(path = path, body = body, .method = .method,
+                      token = token, dots = list(...))
+        ok_resp
+    })
+    expect_true(chat_react(cl, "#lab", "1700000000.000100", "thumbsup"))
+    expect_identical(seen$path, "/api/reactions.add")
+    expect_identical(seen$.method, "POST")
+    expect_identical(seen$token, "xoxb-test")
+    # The three required fields ride in body, which is the only thing
+    # call_slack_api() sends on POST.
+    expect_identical(seen$body$channel, "lab")
+    expect_identical(seen$body$timestamp, "1700000000.000100")
+    expect_identical(seen$body$name, "thumbsup")
+    # ... and nothing is left in the dots, where it would be dropped.
+    expect_identical(length(seen$dots), 0L)
+})
+
+# Colons are how the same emoji is written in Slack prose, and the API
+# rejects them.
+local({
+    seen <- NULL
+    cl <- slack_react_client(function(path, ..., body = NULL, .method,
+                                      token) {
+        seen <<- body
+        ok_resp
+    })
+    chat_react(cl, "lab", "1.1", ":tada:")
+    expect_identical(seen$name, "tada")
+})
+
+# A transport failure propagates rather than reporting a reaction that
+# was never placed.
+expect_error(chat_react(slack_react_client(function(...) stop("not_in_channel")),
+                        "lab", "1.1", "x"),
+             "not_in_channel")
+
+# Slack refuses a call with HTTP 200 and {ok: false}, which
+# call_slack_api()'s stop_for_status() does not catch. Returning TRUE on
+# that reports a reaction that was never placed.
+#
+# The fixtures are parsed bodies -- exactly what Slack's JSON becomes --
+# rather than hand-built httr response objects. The decision under test
+# is what to do with {ok: false}, not how httr unwraps a payload.
+expect_error(
+    chat_react(slack_react_client(function(...) {
+        list(ok = FALSE, error = "channel_not_found")
+    }), "lab", "1.1", "x"),
+    "Slack refused reactions.add: channel_not_found")
+# ok = TRUE is not an error.
+expect_true(chat_react(slack_react_client(function(...) list(ok = TRUE)),
+                       "lab", "1.1", "x"))
+# A refusal with no error string still fails, and says so.
+expect_error(chat_react(slack_react_client(function(...) list(ok = FALSE)),
+                        "lab", "1.1", "x"), "no error given")
+# A body with no `ok` field is left alone rather than guessed at:
+# failing a good call is worse than the status check alone, which is
+# what the rest of this adapter already lives with.
+expect_true(chat_react(slack_react_client(function(...) list(x = 1)),
+                       "lab", "1.1", "x"))
+
+# Drift detection against the real slackr. This is the check that would
+# have caught the dots-versus-body mistake: the seam can be wrong in the
+# same direction as the code, and only the installed package settles it.
+if (requireNamespace("slackr", quietly = TRUE)) {
+    fmls <- names(formals(slackr::call_slack_api))
+    expect_true(all(c("path", "body", ".method", "token") %in% fmls))
+    expect_identical(fmls[1L], "path")
+    # POST sends `body`, and `...` reaches only the GET query. If that
+    # ever changes, the adapter has to change with it.
+    src <- paste(deparse(body(slackr::call_slack_api)), collapse = " ")
+    expect_true(grepl("POST\\(.*body = ", src))
+    expect_true(grepl("query = add_cursor_get\\(\\.\\.\\.", src))
+}
+
+# The capability pair is honest in both directions. reactions was TRUE
+# here before any verb existed to back it; reaction_events is FALSE
+# because conversations.history reports reactions as an aggregate on the
+# message, with no per-reaction id or timestamp to build a record from.
+local({
+    caps <- chat_capabilities(chat_slack(channels = "lab", token = "t",
+                                         .history = function(...) NULL,
+                                         .post = function(...) "1"))
+    expect_true(caps$reactions)
+    expect_false(caps$reaction_events)
+})

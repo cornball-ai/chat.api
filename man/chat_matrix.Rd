@@ -17,7 +17,8 @@ chat_matrix(
   .media = NULL,
   .typing = NULL,
   .crypto = NULL,
-  .save = NULL
+  .save = NULL,
+  .react = NULL
 )
 }
 \arguments{
@@ -137,6 +138,11 @@ test.}
 \code{mx.client::mx_client_save}. Leave NULL in production. Only
 reached on an \code{e2ee} client, which writes the sync cursor after
 the crypto state rather than inside the sync.}
+
+\item{.react}{Testing seam: replacement for \code{mx.api::mx_react}.
+Leave NULL in production. Resolved when \code{chat_react()} is
+called, not here, so a NULL seam costs nothing on installs without
+mx.api.}
 }
 \value{
 A \code{chat_client} of class \code{chat_matrix}.

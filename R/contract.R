@@ -91,13 +91,105 @@ chat_resolve <- function(client, name, ...) {
 #' @param ... Adapter-specific options.
 #' @return A list with at least: \code{threads} (can post into
 #'   threads), \code{thread_replies} (thread replies come back out of
-#'   \code{\link{chat_poll}}), \code{edits}, \code{reactions},
-#'   \code{files}, \code{typing}, \code{e2ee},
-#'   \code{identity_override} (logicals), \code{markup_dialects}
-#'   (character), \code{max_message_bytes} (integer or NA).
+#'   \code{\link{chat_poll}}), \code{edits}, \code{reactions}
+#'   (\code{\link{chat_react}} works), \code{reaction_events} (reactions
+#'   come back out of \code{\link{chat_poll}}), \code{files},
+#'   \code{typing}, \code{e2ee}, \code{identity_override} (logicals),
+#'   \code{markup_dialects} (character), \code{max_message_bytes}
+#'   (integer or NA).
+#'
+#'   Sending and receiving get separate flags wherever a platform does
+#'   one and not the other, which is why \code{threads} and
+#'   \code{thread_replies} are two entries rather than one. Reactions
+#'   split the same way: Slack can place one, and does not report anyone
+#'   else's through the history endpoint this adapter polls, so a
+#'   consumer reading a single flag would wait forever for events that
+#'   never arrive.
 #' @export
 chat_capabilities <- function(client, ...) {
     UseMethod("chat_capabilities")
+}
+
+#' React to a message
+#'
+#' Places a reaction (an emoji or short key) on an existing message.
+#'
+#' The default method throws. A reaction that silently does nothing is
+#' worse than one that fails: the caller believes it acknowledged
+#' something and no one can see that it did not. This differs from
+#' \code{\link{chat_typing}}, whose default is a quiet FALSE, because a
+#' missing typing indicator costs nothing and a missing acknowledgement
+#' can be the whole message. Check \code{chat_capabilities()$reactions}
+#' before calling on an unknown adapter.
+#'
+#' @param client A \code{chat_client}.
+#' @param channel Channel/room identifier.
+#' @param message_id Identifier of the message being reacted to, as
+#'   returned by \code{\link{chat_send}} or carried on a
+#'   \code{\link{chat_message}}'s \code{id}.
+#' @param key The reaction itself. Platforms differ on what they accept:
+#'   Matrix takes any string and conventionally an emoji character,
+#'   Slack takes a short name without colons (\code{"thumbsup"}). Passed
+#'   through unchanged, since translating between the two would have to
+#'   guess.
+#' @param ... Adapter-specific options.
+#' @return The reaction's identifier where the platform gives it one
+#'   (Matrix), invisibly; \code{TRUE} where it does not (Slack).
+#' @export
+chat_react <- function(client, channel, message_id, key, ...) {
+    UseMethod("chat_react")
+}
+
+#' @export
+chat_react.default <- function(client, channel, message_id, key, ...) {
+    stop("chat_react() is not supported by this adapter (",
+         paste(class(client), collapse = "/"),
+         "). Check chat_capabilities()$reactions.", call. = FALSE)
+}
+
+#' Construct a normalized reaction record
+#'
+#' The record \code{\link{chat_poll}} returns in \code{$reactions} on
+#' adapters whose \code{chat_capabilities()$reaction_events} is TRUE.
+#'
+#' Deliberately not a \code{\link{chat_message}}. A reaction has a target
+#' and no body, and the message record has a body and no target;
+#' \code{thread} is the closest slot and it means something else, so
+#' folding one into the other would make every consumer disambiguate by
+#' inspecting fields.
+#'
+#' @param id The reaction's own identifier, or NULL where the platform
+#'   does not give it one. Not the identifier of the message it is
+#'   attached to -- see \code{target}.
+#' @param channel Channel/room identifier (character).
+#' @param sender Sender identifier (character).
+#' @param target Identifier of the message being reacted to (character).
+#' @param key The reaction itself (character): an emoji on Matrix, a
+#'   short name on Slack.
+#' @param ts POSIXct timestamp, or \code{NA} when the transport does not
+#'   report one -- the same rule \code{\link{chat_message}} follows, and
+#'   for the same reason.
+#' @param self Logical: did this client place the reaction? A consumer
+#'   that reacts to acknowledge needs this to avoid answering its own
+#'   acknowledgement. NULL when the adapter cannot tell.
+#' @param raw The adapter's platform-native payload.
+#' @return A list with class \code{chat_reaction}.
+#' @export
+chat_reaction <- function(id, channel, sender, target, key, ts, self = NULL,
+                          raw = NULL) {
+    stopifnot(is.character(channel), is.character(sender),
+              is.character(target), is.character(key))
+    structure(list(id = id, channel = channel, sender = sender,
+                   target = target, key = key, ts = ts, self = self,
+                   raw = raw),
+              class = "chat_reaction")
+}
+
+#' @export
+print.chat_reaction <- function(x, ...) {
+    cat(sprintf("[%s] %s reacted %s to %s in %s\n", format(x$ts, "%H:%M:%S"),
+                x$sender, x$key, x$target, x$channel))
+    invisible(x)
 }
 
 #' Close a chat client's connection

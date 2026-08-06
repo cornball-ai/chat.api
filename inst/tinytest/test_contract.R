@@ -54,3 +54,42 @@ if (requireNamespace("mx.client", quietly = TRUE)) {
     expect_identical(cm$env$mx$user_id, "@bot:example.org")
     expect_false(cm$save_cursor)
 }
+
+# ---- Every adapter answers the reaction capability pair ----
+# A flag one adapter reports and another omits is worse than either
+# answer: a consumer reading it gets NULL, and NULL is not FALSE.
+#
+# The capability methods are called directly rather than through
+# constructors, because chat_irc() opens a socket and chat_matrix()
+# wants a config. Every one of them ignores its client argument for
+# these flags, which is what makes that safe -- and if one stops
+# ignoring it, this is where that shows up.
+local({
+    for (adapter in c("chat_loopback", "chat_irc", "chat_slack",
+                      "chat_matrix")) {
+        m <- getS3method("chat_capabilities", adapter)
+        caps <- m(structure(list(env = new.env()), class = adapter))
+        for (flag in c("reactions", "reaction_events")) {
+            expect_true(flag %in% names(caps), info = paste(adapter, flag))
+            expect_true(is.logical(caps[[flag]]) && length(caps[[flag]]) == 1L,
+                        info = paste(adapter, flag))
+            expect_false(is.na(caps[[flag]]), info = paste(adapter, flag))
+        }
+    }
+})
+
+# An adapter with no reaction support refuses rather than pretending: a
+# silent no-op leaves the caller believing it acknowledged something.
+local({
+    lo <- chat_loopback()
+    expect_false(chat_capabilities(lo)$reactions)
+    expect_error(chat_react(lo, "c", "m", "y"), "not supported by this adapter")
+})
+
+# The two flags mean different things, and the pair is what a consumer
+# reads: Slack can place a reaction and cannot report anyone else's.
+local({
+    slack <- getS3method("chat_capabilities", "chat_slack")(NULL)
+    expect_true(slack$reactions)
+    expect_false(slack$reaction_events)
+})

@@ -37,11 +37,14 @@
 #' @param .post Testing seam: replacement for
 #'   \code{slackr::slackr_msg}. Leave NULL in production; when both
 #'   seams are supplied the slackr package is not required.
+#' @param .react Testing seam: replacement for
+#'   \code{slackr::call_slack_api}. Leave NULL in production. Resolved
+#'   when \code{chat_react()} is called, not here.
 #' @return A \code{chat_client} of class \code{chat_slack}.
 #' @export
 chat_slack <- function(channels = character(),
                        token = Sys.getenv("SLACK_TOKEN"), username = NULL,
-                       .history = NULL, .post = NULL) {
+                       .history = NULL, .post = NULL, .react = NULL) {
     if ((is.null(.history) || is.null(.post)) &&
         !requireNamespace("slackr", quietly = TRUE)) {
         stop("chat_slack() requires the 'slackr' package. ",
@@ -55,7 +58,8 @@ chat_slack <- function(channels = character(),
     structure(list(env = env, channels = sub("^#", "", channels),
                    token = token, username = username,
                    history_fn = .history %||% slackr::slackr_history,
-                   post_fn = .post %||% slackr::slackr_msg),
+                   post_fn = .post %||% slackr::slackr_msg,
+                   react_fn = .react),
               class = c("chat_slack", "chat_client"))
 }
 
@@ -208,14 +212,88 @@ chat_send.chat_slack <- function(client, channel, text,
 }
 
 #' @export
+chat_react.chat_slack <- function(client, channel, message_id, key, ...) {
+    # reactions.add through slackr's generic Web API caller: slackr has
+    # no reaction helper of its own, and calling the endpoint directly
+    # would put an HTTP dependency in a package that has none.
+    #
+    # key goes through unchanged except for stripping colons, which are
+    # how the same emoji is written in Slack prose (":thumbsup:") and are
+    # rejected by the API. Translating a Matrix-style emoji character
+    # into a Slack short name would have to guess, so it does not -- the
+    # contract says the two platforms take different keys.
+    react_fn <- client$react_fn %||% slackr::call_slack_api
+    # body, not `...`. call_slack_api() feeds `...` to the query string on
+    # its GET path and ignores it on POST, where only `body` is sent -- so
+    # passing these as dots produced a reactions.add carrying no channel,
+    # no timestamp and no name, and Slack refused every one of them.
+    resp <- react_fn("/api/reactions.add", .method = "POST",
+                     token = client$token,
+                     body = list(channel = sub("^#", "", channel), timestamp = message_id,
+                                 name = gsub(":", "", key)))
+    # Slack answers a refused call with HTTP 200 and {ok: false, error},
+    # and call_slack_api() only checks the status code, so a bad channel
+    # or an unknown emoji comes back looking like success. Returning TRUE
+    # on that reports a reaction that was never placed.
+    slack_stop_for_error(resp, "reactions.add")
+    # No id: reactions.add answers {ok: true} and Slack gives a reaction
+    # no identity of its own.
+    invisible(TRUE)
+}
+
+#' Raise on a Slack response that is HTTP 200 and {ok: false}
+#'
+#' Slack signals a refused call in the body, not the status, and
+#' \code{slackr::call_slack_api()} only checks the status. Without this a
+#' send that Slack rejected is indistinguishable from one it accepted.
+#'
+#' Unwrapping an httr response needs httr, which is not chat.api's
+#' dependency but is slackr's -- if there is a Slack response to inspect,
+#' slackr made it and httr is installed. An already-parsed body is taken
+#' as-is, which is what a \code{.react} seam hands back and what lets the
+#' decision here be tested on the shape Slack actually sends rather than
+#' on a hand-built imitation of httr's internals.
+#'
+#' A response that cannot be parsed is left alone rather than guessed at:
+#' failing a good call is worse than the status check alone, which is
+#' what the rest of this adapter already lives with.
+#' @noRd
+slack_stop_for_error <- function(resp, what) {
+    parsed <- if (is.list(resp) && !inherits(resp, "response")) {
+        resp
+    } else if (requireNamespace("httr", quietly = TRUE)) {
+        tryCatch(httr::content(resp, as = "parsed"), error = function(e) NULL)
+    }
+    if (is.null(parsed) || is.null(parsed$ok)) {
+        return(invisible(resp))
+    }
+    if (!isTRUE(parsed$ok)) {
+        stop("chat.api: Slack refused ", what, ": ",
+             parsed$error %||% "no error given", call. = FALSE)
+    }
+    invisible(resp)
+}
+
+#' @export
 chat_resolve.chat_slack <- function(client, name, ...) {
     sub("^#", "", name)
 }
 
 #' @export
 chat_capabilities.chat_slack <- function(client, ...) {
+    # reactions has been TRUE since before there was a chat_react() to
+    # back it -- the flag claimed something no verb could deliver. It is
+    # true now.
+    #
+    # reaction_events is FALSE. conversations.history, which this adapter
+    # polls, reports reactions as an aggregate on the message
+    # ({name, users, count}) rather than as events: no per-reaction id and
+    # no per-reaction timestamp, so there is nothing to build a
+    # chat_reaction() from that a consumer could deduplicate across polls.
+    # Reading them as events needs the Events API or Socket Mode, which is
+    # a different transport than this one.
     list(threads = TRUE, thread_replies = FALSE, edits = FALSE,
-         reactions = TRUE, files = FALSE, typing = FALSE, e2ee = FALSE,
-         identity_override = TRUE, markup_dialects = c("plain", "markdown"),
-         max_message_bytes = 40000L)
+         reactions = TRUE, reaction_events = FALSE, files = FALSE,
+         typing = FALSE, e2ee = FALSE, identity_override = TRUE,
+         markup_dialects = c("plain", "markdown"), max_message_bytes = 40000L)
 }

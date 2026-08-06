@@ -437,10 +437,15 @@ expect_false(caps$threads)
 # mx_extract_text_events drops content$m.relates_to, so the relation
 # never reaches the adapter. The flag and the mapping move together.
 expect_false(caps$thread_replies)
-# reactions: chat.api has no reaction verb, and the extractor's m.text
-# filter means an m.reaction can be neither sent nor received here
-expect_false(caps$reactions)
-expect_false("chat_react" %in% getNamespaceExports("chat.api"))
+# reactions is TRUE and there is a verb behind it, which is the whole
+# rule: a flag without its implementation is what this suite exists to
+# catch. reaction_events tracks the installed mx.client, since an older
+# one has no reaction extractor and would report an empty list forever.
+expect_true(caps$reactions)
+expect_true("chat_react" %in% getNamespaceExports("chat.api"))
+expect_true(is.function(getS3method("chat_react", "chat_matrix")))
+expect_true(is.logical(caps$reaction_events))
+expect_identical(caps$reaction_events, chat.api:::matrix_reactions_available())
 # e2ee answers for this client. `s` was built without e2ee = TRUE, so it
 # holds no crypto context and chat_send goes through mx_send_text, which
 # PUTs a cleartext m.room.message whatever the room's encryption state
@@ -1265,3 +1270,110 @@ expect_identical(chat_matrix(mx = fake_mx(), .sync = function(...) NULL,
                              .send = function(...) "$id",
                              .media = function(...) NULL,
                              .save = mine)$save_fn, mine)
+
+# ---- Reactions ----
+# A reaction is not a message: it has a target and no body, where a
+# message has a body and no target. chat_poll() reports them in their own
+# list rather than folding them into $messages.
+
+rx_ev <- function(event_id, target = "$msg", key = "y",
+                  sender = "@alice:ex", ts = 1700000000000,
+                  rel_type = "m.annotation", room = "!room:ex") {
+    list(type = "m.reaction", event_id = event_id, sender = sender,
+         origin_server_ts = ts,
+         content = list(`m.relates_to` = list(rel_type = rel_type,
+                                              event_id = target, key = key)))
+}
+
+# Sending goes through mx.api::mx_react, seamed here.
+local({
+    seen <- NULL
+    cl <- seam_client(.react = function(session, room_id, event_id, key) {
+        seen <<- list(room_id = room_id, event_id = event_id, key = key)
+        "$reaction1"
+    })
+    expect_identical(chat_react(cl, "!room:ex", "$msg", "\U0001F44D"),
+                     "$reaction1")
+    expect_identical(seen$room_id, "!room:ex")
+    # The message id is the target, not the reaction's own -- the one
+    # confusion this argument order invites.
+    expect_identical(seen$event_id, "$msg")
+    expect_identical(seen$key, "\U0001F44D")
+})
+
+# A failing react propagates. Unlike a typing indicator, a dropped
+# acknowledgement is one the sender believes it made.
+expect_error(chat_react(seam_client(.react = function(...) stop("403")),
+                        "!room:ex", "$msg", "y"), "403")
+
+# An adapter with no reaction support says so rather than doing nothing
+# quietly: a silent no-op has the caller believe it acknowledged.
+expect_error(chat_react(structure(list(), class = c("chat_nothing",
+                                                    "chat_client")),
+                        "!r", "$m", "y"),
+             "not supported by this adapter")
+
+# ---- Reactions come back out of chat_poll ----
+if (requireNamespace("mx.client", quietly = TRUE) &&
+    "mx_extract_reactions" %in% getNamespaceExports("mx.client")) {
+
+    res <- chat_poll(seam_client(
+        recs = list(rec("$m1", body = "hello")),
+        sync = wrap_sync(list(ev("$m1"), rx_ev("$r1", target = "$m1",
+                                               key = "\U0001F44D")))))
+    expect_identical(length(res$messages), 1L)
+    expect_identical(length(res$reactions), 1L)
+    r <- res$reactions[[1L]]
+    expect_inherits(r, "chat_reaction")
+    # id is the reaction's own event, target is what it annotates.
+    expect_identical(r$id, "$r1")
+    expect_identical(r$target, "$m1")
+    expect_identical(r$channel, "!room:ex")
+    expect_identical(r$sender, "@alice:ex")
+    expect_identical(r$key, "\U0001F44D")
+    expect_false(r$self)
+    expect_equal(as.numeric(r$ts), 1700000000, tolerance = 1e-6)
+    # A reaction is not in $messages, and a message is not in $reactions.
+    expect_identical(res$messages[[1L]]$id, "$m1")
+    expect_false(inherits(res$messages[[1L]], "chat_reaction"))
+
+    # The bot's own reactions come back tagged, not dropped: a consumer
+    # tracking which it has already placed needs them.
+    res <- chat_poll(seam_client(
+        sync = wrap_sync(list(rx_ev("$r1", sender = "@bot:ex")))))
+    expect_true(res$reactions[[1L]]$self)
+
+    # Reactions keep the homeserver's order, same as messages.
+    res <- chat_poll(seam_client(
+        sync = wrap_sync(list(rx_ev("$b"), rx_ev("$a"), rx_ev("$c")))))
+    expect_identical(vapply(res$reactions, function(r) r$id, character(1)),
+                     c("$b", "$a", "$c"))
+
+    # A sync with no reactions gives an empty list, not NULL: a consumer
+    # looping over it should not have to test for both.
+    res <- chat_poll(seam_client(sync = wrap_sync(list(ev("$m1")))))
+    expect_identical(res$reactions, list())
+    expect_false(is.null(res$reactions))
+
+    # A missing origin_server_ts is NA, never the poll's clock.
+    res <- chat_poll(seam_client(sync = wrap_sync(list(rx_ev("$r1",
+                                                             ts = NULL)))))
+    expect_true(is.na(res$reactions[[1L]]$ts))
+}
+
+# ---- The record itself ----
+rr <- chat_reaction(id = "$r", channel = "!c", sender = "@a", target = "$m",
+                    key = "y", ts = as.POSIXct(NA))
+expect_inherits(rr, "chat_reaction")
+expect_identical(rr$target, "$m")
+expect_null(rr$self)
+# A platform that gives a reaction no identity of its own passes NULL,
+# which is different from not knowing the target.
+expect_null(chat_reaction(id = NULL, channel = "!c", sender = "@a",
+                          target = "$m", key = "y", ts = as.POSIXct(NA))$id)
+# The target is required and must be a string: a reaction to nothing is
+# not a reaction.
+expect_error(chat_reaction(id = "$r", channel = "!c", sender = "@a",
+                           target = NULL, key = "y", ts = as.POSIXct(NA)))
+expect_error(chat_reaction(id = "$r", channel = "!c", sender = "@a",
+                           target = "$m", key = NULL, ts = as.POSIXct(NA)))
