@@ -223,12 +223,55 @@ chat_react.chat_slack <- function(client, channel, message_id, key, ...) {
     # into a Slack short name would have to guess, so it does not -- the
     # contract says the two platforms take different keys.
     react_fn <- client$react_fn %||% slackr::call_slack_api
-    react_fn("/api/reactions.add", .method = "POST", token = client$token,
-             channel = sub("^#", "", channel), timestamp = message_id,
-             name = gsub(":", "", key))
-    # No id comes back: reactions.add answers {ok: true} and Slack gives a
-    # reaction no identity of its own.
+    # body, not `...`. call_slack_api() feeds `...` to the query string on
+    # its GET path and ignores it on POST, where only `body` is sent -- so
+    # passing these as dots produced a reactions.add carrying no channel,
+    # no timestamp and no name, and Slack refused every one of them.
+    resp <- react_fn("/api/reactions.add", .method = "POST",
+                     token = client$token,
+                     body = list(channel = sub("^#", "", channel), timestamp = message_id,
+                                 name = gsub(":", "", key)))
+    # Slack answers a refused call with HTTP 200 and {ok: false, error},
+    # and call_slack_api() only checks the status code, so a bad channel
+    # or an unknown emoji comes back looking like success. Returning TRUE
+    # on that reports a reaction that was never placed.
+    slack_stop_for_error(resp, "reactions.add")
+    # No id: reactions.add answers {ok: true} and Slack gives a reaction
+    # no identity of its own.
     invisible(TRUE)
+}
+
+#' Raise on a Slack response that is HTTP 200 and {ok: false}
+#'
+#' Slack signals a refused call in the body, not the status, and
+#' \code{slackr::call_slack_api()} only checks the status. Without this a
+#' send that Slack rejected is indistinguishable from one it accepted.
+#'
+#' Unwrapping an httr response needs httr, which is not chat.api's
+#' dependency but is slackr's -- if there is a Slack response to inspect,
+#' slackr made it and httr is installed. An already-parsed body is taken
+#' as-is, which is what a \code{.react} seam hands back and what lets the
+#' decision here be tested on the shape Slack actually sends rather than
+#' on a hand-built imitation of httr's internals.
+#'
+#' A response that cannot be parsed is left alone rather than guessed at:
+#' failing a good call is worse than the status check alone, which is
+#' what the rest of this adapter already lives with.
+#' @noRd
+slack_stop_for_error <- function(resp, what) {
+    parsed <- if (is.list(resp) && !inherits(resp, "response")) {
+        resp
+    } else if (requireNamespace("httr", quietly = TRUE)) {
+        tryCatch(httr::content(resp, as = "parsed"), error = function(e) NULL)
+    }
+    if (is.null(parsed) || is.null(parsed$ok)) {
+        return(invisible(resp))
+    }
+    if (!isTRUE(parsed$ok)) {
+        stop("chat.api: Slack refused ", what, ": ",
+             parsed$error %||% "no error given", call. = FALSE)
+    }
+    invisible(resp)
 }
 
 #' @export
