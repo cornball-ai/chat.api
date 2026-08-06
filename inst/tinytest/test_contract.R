@@ -131,3 +131,34 @@ local({
     expect_true(caps$channel_info && caps$members)
     expect_false("members" %in% names(formals(chat_channel_info)))
 })
+
+# ---- Every adapter answers the invite pair ----
+local({
+    for (adapter in c("chat_loopback", "chat_irc", "chat_slack",
+                      "chat_matrix")) {
+        m <- getS3method("chat_capabilities", adapter)
+        caps <- m(structure(list(env = new.env()), class = adapter))
+        for (flag in c("invites", "join")) {
+            expect_true(flag %in% names(caps), info = paste(adapter, flag))
+            expect_true(is.logical(caps[[flag]]) && length(caps[[flag]]) == 1L,
+                        info = paste(adapter, flag))
+            expect_false(is.na(caps[[flag]]), info = paste(adapter, flag))
+        }
+    }
+})
+
+# Receiving invitations and being able to join are separate: Slack does
+# the second and not the first. A single flag would have a consumer
+# either wait for invitations that never arrive or refuse to join a
+# channel it could.
+local({
+    slack <- getS3method("chat_capabilities", "chat_slack")(NULL)
+    expect_false(slack$invites)
+    expect_true(slack$join)
+})
+
+local({
+    lo <- chat_loopback()
+    expect_false(chat_capabilities(lo)$join)
+    expect_error(chat_join(lo, "c"), "not supported by this adapter")
+})

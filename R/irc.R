@@ -125,9 +125,9 @@ chat_resolve.chat_irc <- function(client, name, ...) {
 chat_capabilities.chat_irc <- function(client, ...) {
     list(threads = FALSE, thread_replies = FALSE, edits = FALSE,
          reactions = FALSE, reaction_events = FALSE, channel_info = FALSE,
-         members = FALSE, files = FALSE, typing = FALSE, e2ee = FALSE,
-         identity_override = FALSE, markup_dialects = "plain",
-         max_message_bytes = 400L)
+         members = FALSE, invites = FALSE, join = FALSE, files = FALSE,
+         typing = FALSE, e2ee = FALSE, identity_override = FALSE,
+         markup_dialects = "plain", max_message_bytes = 400L)
 }
 
 #' @export

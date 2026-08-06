@@ -20,7 +20,8 @@ chat_matrix(
   .save = NULL,
   .react = NULL,
   .info = NULL,
-  .members = NULL
+  .members = NULL,
+  .join = NULL
 )
 }
 \arguments{
@@ -152,6 +153,9 @@ replacing \code{mx.api::mx_room_name} and
 
 \item{.members}{Testing seam: replacement for
 \code{mx.api::mx_room_members}. Leave NULL in production.}
+
+\item{.join}{Testing seam: replacement for
+\code{mx.api::mx_room_join}. Leave NULL in production.}
 }
 \value{
 A \code{chat_client} of class \code{chat_matrix}.
