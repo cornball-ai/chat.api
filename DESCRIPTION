@@ -20,6 +20,7 @@ Depends: R (>= 4.0)
 URL: https://github.com/cornball-ai/chat.api
 BugReports: https://github.com/cornball-ai/chat.api/issues
 Suggests:
+    httr,
     mx.api,
     mx.client (>= 0.2.0.3),
     mx.crypto,
