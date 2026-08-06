@@ -18,7 +18,9 @@ chat_matrix(
   .typing = NULL,
   .crypto = NULL,
   .save = NULL,
-  .react = NULL
+  .react = NULL,
+  .info = NULL,
+  .members = NULL
 )
 }
 \arguments{
@@ -143,6 +145,13 @@ the crypto state rather than inside the sync.}
 Leave NULL in production. Resolved when \code{chat_react()} is
 called, not here, so a NULL seam costs nothing on installs without
 mx.api.}
+
+\item{.info}{Testing seam: a list with \code{name} and \code{topic},
+replacing \code{mx.api::mx_room_name} and
+\code{mx.api::mx_room_topic}. Leave NULL in production.}
+
+\item{.members}{Testing seam: replacement for
+\code{mx.api::mx_room_members}. Leave NULL in production.}
 }
 \value{
 A \code{chat_client} of class \code{chat_matrix}.

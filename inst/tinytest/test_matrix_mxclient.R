@@ -735,3 +735,90 @@ if (requireNamespace("mx.crypto", quietly = TRUE)) {
         unlink(store, recursive = TRUE)
     })
 }
+
+# ---- Channel info and members ----
+# Two verbs, not the one the migration plan named. A name and a topic are
+# two short strings that change rarely; a member list is unbounded and
+# changes constantly. Bundling them makes every read of a topic pay for a
+# member list, and a consumer caches the two on different schedules for
+# exactly that reason.
+#
+# Here rather than in test_matrix.R because both go through
+# mx_client_session(), the same reason chat_typing() and chat_resolve()
+# are tested here.
+
+info_client <- function(info = NULL, members = NULL) {
+    chat_matrix(mx = list(user_id = "@bot:ex", server = "https://ex.invalid",
+                          token = "tok", device_id = "DEV"),
+                .sync = function(...) NULL, .extract = function(...) list(),
+                .send = function(...) "$id", .media = function(...) NULL,
+                .info = info, .members = members)
+}
+
+local({
+    cl <- info_client(info = list(name = function(s, r) "The Lab",
+                                  topic = function(s, r) "cwd=/srv/lab"),
+                      members = function(s, r) c("@a:ex", "@b:ex"))
+    info <- chat_channel_info(cl, "!room:ex")
+    expect_identical(info$id, "!room:ex")
+    expect_identical(info$name, "The Lab")
+    expect_identical(info$topic, "cwd=/srv/lab")
+    expect_identical(chat_members(cl, "!room:ex"), c("@a:ex", "@b:ex"))
+})
+
+# A room with neither is the ordinary case for a direct message. mx.api
+# raises M_NOT_FOUND for an absent state event, which is the answer
+# "there is none" rather than a failure -- NULL, which is what the
+# contract says a missing field looks like.
+local({
+    cl <- info_client(info = list(name = function(s, r) stop("M_NOT_FOUND"),
+                                  topic = function(s, r) stop("M_NOT_FOUND")))
+    info <- chat_channel_info(cl, "!dm:ex")
+    expect_null(info$name)
+    expect_null(info$topic)
+    # The id is still answered: it is what the caller passed in.
+    expect_identical(info$id, "!dm:ex")
+})
+
+# An empty string is not a name. A room whose name was set and later
+# cleared reads as "" and must not come back as one.
+local({
+    cl <- info_client(info = list(name = function(s, r) "",
+                                  topic = function(s, r) character()))
+    info <- chat_channel_info(cl, "!room:ex")
+    expect_null(info$name)
+    expect_null(info$topic)
+})
+
+# One present and one absent is not all-or-nothing.
+local({
+    cl <- info_client(info = list(name = function(s, r) stop("M_NOT_FOUND"),
+                                  topic = function(s, r) "just a topic"))
+    info <- chat_channel_info(cl, "!room:ex")
+    expect_null(info$name)
+    expect_identical(info$topic, "just a topic")
+})
+
+# Members errors propagate. An empty room and an unanswerable question
+# are different things, and character() has to mean only the first.
+expect_error(chat_members(info_client(members = function(s, r) stop("403")),
+                          "!room:ex"), "403")
+expect_identical(chat_members(info_client(members = function(s, r) character()),
+                              "!room:ex"), character())
+
+# Both capabilities are TRUE and both verbs exist behind them.
+local({
+    caps <- chat_capabilities(info_client())
+    expect_true(caps$channel_info)
+    expect_true(caps$members)
+    expect_true(is.function(getS3method("chat_channel_info", "chat_matrix")))
+    expect_true(is.function(getS3method("chat_members", "chat_matrix")))
+})
+
+# Drift detection: the adapter passes (session, room_id) positionally.
+expect_identical(names(formals(mx.api::mx_room_name))[1:2],
+                 c("session", "room_id"))
+expect_identical(names(formals(mx.api::mx_room_topic))[1:2],
+                 c("session", "room_id"))
+expect_identical(names(formals(mx.api::mx_room_members))[1:2],
+                 c("session", "room_id"))

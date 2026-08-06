@@ -270,3 +270,105 @@ local({
     expect_true(caps$reactions)
     expect_false(caps$reaction_events)
 })
+
+# ---- Channel info and members ----
+# One call for name and topic, where Matrix takes two: conversations.info
+# carries both. Membership is a separate, paginated call -- which is the
+# other half of why it is a separate verb.
+
+slack_api_client <- function(api) {
+    chat_slack(channels = "lab", token = "xoxb-test",
+               .history = function(...) NULL, .post = function(...) "1.1",
+               .api = api)
+}
+
+local({
+    seen <- NULL
+    cl <- slack_api_client(function(path, ..., .method, token) {
+        seen <<- c(list(path = path, .method = .method), list(...))
+        list(ok = TRUE, channel = list(id = "C123", name = "lab",
+                                       topic = list(value = "the lab"),
+                                       purpose = list(value = "ignored")))
+    })
+    info <- chat_channel_info(cl, "#lab")
+    expect_identical(seen$path, "/api/conversations.info")
+    expect_identical(seen$.method, "GET")
+    # The leading # is stripped, as everywhere else in this adapter.
+    expect_identical(seen$channel, "lab")
+    expect_identical(info$id, "C123")
+    expect_identical(info$name, "lab")
+    # topic wins over purpose when both are set.
+    expect_identical(info$topic, "the lab")
+})
+
+# An unset topic comes back as "" rather than being omitted, and "" is
+# not a topic. purpose is the fallback, and an unset one is NULL too.
+local({
+    cl <- slack_api_client(function(...) {
+        list(ok = TRUE, channel = list(id = "C1", name = "lab",
+                                       topic = list(value = ""),
+                                       purpose = list(value = "why we are here")))
+    })
+    expect_identical(chat_channel_info(cl, "lab")$topic, "why we are here")
+})
+local({
+    cl <- slack_api_client(function(...) {
+        list(ok = TRUE, channel = list(id = "C1", name = "lab",
+                                       topic = list(value = ""),
+                                       purpose = list(value = "")))
+    })
+    expect_null(chat_channel_info(cl, "lab")$topic)
+})
+
+# A refusal is an error, not an empty channel.
+expect_error(chat_channel_info(slack_api_client(function(...) {
+    list(ok = FALSE, error = "channel_not_found")
+}), "lab"), "Slack refused conversations.info: channel_not_found")
+
+# Members paginate, and every page is walked before anything is
+# returned. A list truncated at the first page reads as a smaller room,
+# which is how a consumer gating on member count decides wrong quietly.
+local({
+    calls <- list()
+    cl <- slack_api_client(function(path, ..., .method, token) {
+        d <- list(...)
+        calls[[length(calls) + 1L]] <<- d
+        if (!nzchar(d$cursor)) {
+            list(ok = TRUE, members = list("U1", "U2"),
+                 response_metadata = list(next_cursor = "page2"))
+        } else {
+            list(ok = TRUE, members = list("U3"),
+                 response_metadata = list(next_cursor = ""))
+        }
+    })
+    expect_identical(chat_members(cl, "#lab"), c("U1", "U2", "U3"))
+    expect_identical(length(calls), 2L)
+    expect_identical(calls[[1L]]$cursor, "")
+    expect_identical(calls[[2L]]$cursor, "page2")
+    expect_identical(calls[[1L]]$channel, "lab")
+})
+
+# A response with no next_cursor at all ends the walk rather than
+# looping forever.
+local({
+    n <- 0L
+    cl <- slack_api_client(function(...) {
+        n <<- n + 1L
+        list(ok = TRUE, members = list("U1"))
+    })
+    expect_identical(chat_members(cl, "lab"), "U1")
+    expect_identical(n, 1L)
+})
+
+# A refusal mid-pagination is an error, not a short list.
+expect_error(chat_members(slack_api_client(function(...) {
+    list(ok = FALSE, error = "not_in_channel")
+}), "lab"), "Slack refused conversations.members: not_in_channel")
+
+local({
+    caps <- chat_capabilities(chat_slack(channels = "lab", token = "t",
+                                         .history = function(...) NULL,
+                                         .post = function(...) "1"))
+    expect_true(caps$channel_info)
+    expect_true(caps$members)
+})

@@ -40,11 +40,16 @@
 #' @param .react Testing seam: replacement for
 #'   \code{slackr::call_slack_api}. Leave NULL in production. Resolved
 #'   when \code{chat_react()} is called, not here.
+#' @param .api Testing seam: replacement for
+#'   \code{slackr::call_slack_api} on the read paths
+#'   (\code{chat_channel_info()}, \code{chat_members()}). Leave NULL in
+#'   production.
 #' @return A \code{chat_client} of class \code{chat_slack}.
 #' @export
 chat_slack <- function(channels = character(),
                        token = Sys.getenv("SLACK_TOKEN"), username = NULL,
-                       .history = NULL, .post = NULL, .react = NULL) {
+                       .history = NULL, .post = NULL, .react = NULL,
+                       .api = NULL) {
     if ((is.null(.history) || is.null(.post)) &&
         !requireNamespace("slackr", quietly = TRUE)) {
         stop("chat_slack() requires the 'slackr' package. ",
@@ -59,7 +64,7 @@ chat_slack <- function(channels = character(),
                    token = token, username = username,
                    history_fn = .history %||% slackr::slackr_history,
                    post_fn = .post %||% slackr::slackr_msg,
-                   react_fn = .react),
+                   react_fn = .react, api_fn = .api),
               class = c("chat_slack", "chat_client"))
 }
 
@@ -259,19 +264,84 @@ chat_react.chat_slack <- function(client, channel, message_id, key, ...) {
 #' what the rest of this adapter already lives with.
 #' @noRd
 slack_stop_for_error <- function(resp, what) {
-    parsed <- if (is.list(resp) && !inherits(resp, "response")) {
-        resp
-    } else if (requireNamespace("httr", quietly = TRUE)) {
-        tryCatch(httr::content(resp, as = "parsed"), error = function(e) NULL)
-    }
-    if (is.null(parsed) || is.null(parsed$ok)) {
+    body <- slack_body(resp)
+    if (is.null(body) || is.null(body$ok)) {
         return(invisible(resp))
     }
-    if (!isTRUE(parsed$ok)) {
+    if (!isTRUE(body$ok)) {
         stop("chat.api: Slack refused ", what, ": ",
-             parsed$error %||% "no error given", call. = FALSE)
+             body$error %||% "no error given", call. = FALSE)
     }
     invisible(resp)
+}
+
+#' @export
+chat_channel_info.chat_slack <- function(client, channel, ...) {
+    # One call, where Matrix takes two: conversations.info carries name
+    # and topic together. That is the other half of why membership is a
+    # separate verb -- conversations.members is a separate call here too,
+    # and a paginated one.
+    api <- client$api_fn %||% slackr::call_slack_api
+    body <- slack_body(api("/api/conversations.info", .method = "GET",
+                           token = client$token,
+                           channel = sub("^#", "", channel)))
+    slack_stop_for_error(body, "conversations.info")
+    ch <- body$channel %||% list()
+    # An unset purpose comes back as "" rather than being omitted, and ""
+    # is not a topic. NULL is what the contract says "there is none"
+    # looks like.
+    blank <- function(x) {
+        if (is.null(x) || !length(x) || !nzchar(x[[1L]])) {
+            NULL
+        } else {
+            as.character(x)[[1L]]
+        }
+    }
+    list(id = blank(ch$id) %||% sub("^#", "", channel),
+         name = blank(ch$name),
+         topic = blank(ch$topic$value) %||% blank(ch$purpose$value))
+}
+
+#' @export
+chat_members.chat_slack <- function(client, channel, ...) {
+    api <- client$api_fn %||% slackr::call_slack_api
+    out <- character()
+    cursor <- ""
+    # Paginated, and a partial answer is worse than none here: a member
+    # list truncated at the first page reads as a smaller room, which is
+    # how a consumer gating on member count reaches the wrong decision
+    # without anything looking wrong. Every page is walked before
+    # anything is returned.
+    repeat {
+        body <- slack_body(api("/api/conversations.members", .method = "GET",
+                               token = client$token,
+                               channel = sub("^#", "", channel), limit = 200L,
+                               cursor = cursor))
+        slack_stop_for_error(body, "conversations.members")
+        out <- c(out, as.character(body$members %||% character()))
+        cursor <- body$response_metadata$next_cursor %||% ""
+        if (!length(cursor) || !nzchar(cursor)) {
+            break
+        }
+    }
+    out
+}
+
+#' Parsed body of a Slack response
+#'
+#' Accepts an httr response or an already-parsed list, so a seam can hand
+#' back the shape Slack's JSON becomes without building an imitation of
+#' httr's internals. httr is slackr's own dependency: if there is a
+#' response object to unwrap, slackr made it.
+#' @noRd
+slack_body <- function(resp) {
+    if (is.list(resp) && !inherits(resp, "response")) {
+        return(resp)
+    }
+    if (!requireNamespace("httr", quietly = TRUE)) {
+        return(NULL)
+    }
+    tryCatch(httr::content(resp, as = "parsed"), error = function(e) NULL)
 }
 
 #' @export
@@ -293,7 +363,8 @@ chat_capabilities.chat_slack <- function(client, ...) {
     # Reading them as events needs the Events API or Socket Mode, which is
     # a different transport than this one.
     list(threads = TRUE, thread_replies = FALSE, edits = FALSE,
-         reactions = TRUE, reaction_events = FALSE, files = FALSE,
-         typing = FALSE, e2ee = FALSE, identity_override = TRUE,
-         markup_dialects = c("plain", "markdown"), max_message_bytes = 40000L)
+         reactions = TRUE, reaction_events = FALSE, channel_info = TRUE,
+         members = TRUE, files = FALSE, typing = FALSE, e2ee = FALSE,
+         identity_override = TRUE, markup_dialects = c("plain", "markdown"),
+         max_message_bytes = 40000L)
 }
