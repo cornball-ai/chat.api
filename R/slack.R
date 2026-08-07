@@ -383,8 +383,48 @@ chat_capabilities.chat_slack <- function(client, ...) {
          # conversations.history says nothing about it -- there is no
          # invitation to hand a consumer. Joining an open channel is a
          # different thing, and does work.
-         invites = FALSE, join = TRUE,
+         invites = FALSE, join = TRUE, whoami = TRUE,
          files = FALSE, typing = FALSE, e2ee = FALSE,
          identity_override = TRUE, markup_dialects = c("plain", "markdown"),
          max_message_bytes = 40000L)
+}
+
+#' @export
+chat_whoami.chat_slack <- function(client, ...) {
+    # Cached for the client's lifetime. Unlike Matrix, where the id is
+    # already a field of the config in hand, Slack only answers this over
+    # the network -- and chat_addressed() asks once per message. The
+    # answer is a property of the token, which cannot change underneath a
+    # client that was constructed with it.
+    if (!is.null(client$env$whoami)) {
+        return(client$env$whoami)
+    }
+    api <- client$api_fn %||% slackr::call_slack_api
+    body <- slack_body(api("/api/auth.test", .method = "GET",
+                           token = client$token))
+    slack_stop_for_error(body, "auth.test")
+    id <- body$user_id
+    if (is.null(id) || !length(id) || !nzchar(as.character(id)[[1L]])) {
+        stop("chat.api: Slack auth.test returned no user_id.", call. = FALSE)
+    }
+    who <- chat_identity(as.character(id)[[1L]],
+                         display = body$user %||% NA_character_,
+                         raw = body)
+    client$env$whoami <- who
+    who
+}
+
+#' @export
+chat_addressed.chat_slack <- function(client, message, ...) {
+    id <- chat_whoami(client)$id
+    if (identity_mentioned(id, message)) {
+        return(TRUE)
+    }
+    body <- message$body %||% ""
+    # Slack does not leave a mention as text: the sending client rewrites
+    # it to <@U0123> before the message is stored, so this is a literal
+    # match and there is no @name form to also look for. Someone who
+    # typed the bot's display name without selecting the completion did
+    # not mention it, and Slack agrees -- no notification goes out.
+    nzchar(body) && grepl(sprintf("<@%s>", id), body, fixed = TRUE)
 }

@@ -663,11 +663,70 @@ chat_capabilities.chat_matrix <- function(client, ...) {
     list(threads = FALSE, thread_replies = FALSE, edits = FALSE,
          reactions = TRUE, reaction_events = matrix_reactions_available(),
          channel_info = TRUE, members = TRUE,
-         invites = matrix_invites_available(), join = TRUE,
+         invites = matrix_invites_available(), join = TRUE, whoami = TRUE,
          files = !isTRUE(client$e2ee), typing = TRUE,
          e2ee = isTRUE(client$e2ee), identity_override = FALSE,
          markup_dialects = c("plain", "markdown"),
          max_message_bytes = NA_integer_)
+}
+
+#' @export
+chat_whoami.chat_matrix <- function(client, ...) {
+    mx <- client$env$mx
+    id <- mx$user_id
+    if (!is.character(id) || length(id) != 1L || !nzchar(id)) {
+        stop("chat.api: this Matrix client has no user_id. ",
+             "Log in with mx.client before asking who it is.", call. = FALSE)
+    }
+    # raw carries the identity, not the config it came from. That config
+    # holds an access token and possibly a password, and an identity
+    # record is exactly the kind of thing a consumer prints into a log.
+    chat_identity(id, display = mx$displayname %||% NA_character_,
+                  raw = list(user_id = id, device_id = mx$device_id))
+}
+
+# Everything between the leading sigil and the first colon:
+# "@bot:example.org" -> "bot". "" for anything not shaped like a user id,
+# which the caller must read as "no localpart to match on" rather than
+# building an empty pattern that matches everywhere.
+matrix_localpart <- function(id) {
+    if (!grepl("^@[^:]+:", id)) {
+        return("")
+    }
+    sub(":.*$", "", sub("^@", "", id))
+}
+
+# The characters a Matrix localpart may contain, per the identifier
+# grammar. Used as a negative lookahead so "@bot" does not match inside
+# "@bot2" or "@bot.deploy", both of which are somebody else.
+MATRIX_LOCALPART_CHARS <- "a-z0-9._=/+-"
+
+#' @export
+chat_addressed.chat_matrix <- function(client, message, ...) {
+    id <- chat_whoami(client)$id
+    if (identity_mentioned(id, message)) {
+        return(TRUE)
+    }
+    body <- message$body %||% ""
+    if (!nzchar(body)) {
+        return(FALSE)
+    }
+    # The full user id, spelled out. A rich mention renders as a pill
+    # whose plain-text fallback is usually the display name, so this is
+    # for the person who typed the id instead of clicking a completion.
+    if (grepl(id, body, fixed = TRUE)) {
+        return(TRUE)
+    }
+    localpart <- matrix_localpart(id)
+    if (!nzchar(localpart)) {
+        return(FALSE)
+    }
+    # "@bot" as a whole word. The lookahead is what \\b would be if \\b
+    # knew about Matrix: a localpart may contain "." and "-", so \\b ends
+    # the word early and "@bot.deploy" matches "@bot" -- the wrong bot
+    # answers, and the right one never sees it.
+    grepl(sprintf("@%s(?![%s])", escape_rx(localpart), MATRIX_LOCALPART_CHARS),
+          body, perl = TRUE, ignore.case = TRUE)
 }
 
 `%||%` <- function(a, b) {

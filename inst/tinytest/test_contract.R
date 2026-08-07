@@ -162,3 +162,48 @@ local({
     expect_false(chat_capabilities(lo)$join)
     expect_error(chat_join(lo, "c"), "not supported by this adapter")
 })
+
+# ---- Identity record ----
+id <- chat_identity("@bot:ex", display = "corteza")
+expect_inherits(id, "chat_identity")
+expect_identical(id$id, "@bot:ex")
+expect_identical(id$display, "corteza")
+expect_true(is.na(chat_identity("@bot:ex")$display))
+expect_true(is.na(chat_identity("@bot:ex", display = NULL)$display))
+expect_error(chat_identity(""))
+expect_error(chat_identity(NULL))
+expect_error(chat_identity(c("@a:ex", "@b:ex")))
+
+# An adapter that cannot say who it is says so, rather than answering NA
+# and letting every self-check silently report "not me".
+nothing <- structure(list(), class = c("chat_nothing", "chat_client"))
+expect_error(chat_whoami(nothing), "not supported by this adapter")
+
+# ---- chat_addressed, the default ----
+# Declared mentions only. An adapter that does not override this
+# under-reports: a bot that misses being addressed stays quiet, one that
+# over-reports talks over people unprompted.
+local({
+    cl <- chat_loopback()
+    expect_identical(chat_whoami(cl)$id, "loopback")
+    m <- function(body, mentions = NULL) {
+        chat_message(id = "1", channel = "c", sender = "ann", body = body,
+                     ts = Sys.time(), mentions = mentions)
+    }
+    expect_true(chat_addressed(cl, m("x", mentions = "loopback")))
+    expect_true(chat_addressed(cl, m("x", mentions = c("ann", "loopback"))))
+    expect_false(chat_addressed(cl, m("x", mentions = "ann")))
+    # The plain-text form is not read by the default, deliberately.
+    expect_false(chat_addressed(cl, m("hey loopback")))
+    expect_false(chat_addressed(cl, m("x")))
+    expect_false(chat_addressed(cl, m("x", mentions = character())))
+    expect_true(chat_capabilities(cl)$whoami)
+})
+
+# The default needs an identity, so an adapter with neither reports the
+# missing one rather than a bare FALSE.
+expect_error(chat_addressed(nothing,
+                            chat_message(id = "1", channel = "c",
+                                         sender = "a", body = "b",
+                                         ts = Sys.time())),
+             "not supported by this adapter")

@@ -65,3 +65,28 @@ if (!is.null(ss)) {
 offline <- structure(list(), class = c("chat_irc", "chat_client"))
 expect_identical(chat_resolve(offline, "lab"), "#lab")
 expect_identical(chat_resolve(offline, "#lab"), "#lab")
+
+# ---- Identity ----
+local({
+    cl <- structure(list(env = new.env(parent = emptyenv()), nick = "corteza"),
+                    class = c("chat_irc", "chat_client"))
+    irc_msg <- function(body = "", mentions = NULL) {
+        chat_message(id = "1", channel = "#lab", sender = "ann",
+                     body = body, ts = Sys.time(), mentions = mentions)
+    }
+    expect_identical(chat_whoami(cl)$id, "corteza")
+    expect_true(chat_capabilities(cl)$whoami)
+
+    # IRC addressing is a naming convention and nothing else.
+    expect_true(chat_addressed(cl, irc_msg("corteza: do the thing")))
+    expect_true(chat_addressed(cl, irc_msg("thanks corteza")))
+    expect_true(chat_addressed(cl, irc_msg("CORTEZA, hello")))
+    expect_false(chat_addressed(cl, irc_msg("corteza2 is the other one")))
+    # "|away" and "_" are nick characters, so these are other clients of
+    # the same person rather than the nick that was addressed.
+    expect_false(chat_addressed(cl, irc_msg("corteza|away said so")))
+    expect_false(chat_addressed(cl, irc_msg("ping corteza_")))
+    expect_false(chat_addressed(cl, irc_msg("nobody here")))
+    expect_false(chat_addressed(cl, irc_msg("")))
+    expect_true(chat_addressed(cl, irc_msg("nothing", mentions = "corteza")))
+})
