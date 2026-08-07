@@ -384,6 +384,8 @@ chat_capabilities.chat_slack <- function(client, ...) {
          # invitation to hand a consumer. Joining an open channel is a
          # different thing, and does work.
          invites = FALSE, join = TRUE, whoami = TRUE,
+         channels = TRUE, history = TRUE, pending = FALSE,
+         mark_read = TRUE, set_identity = TRUE, relogin = FALSE,
          files = FALSE, typing = FALSE, e2ee = FALSE,
          identity_override = TRUE, markup_dialects = c("plain", "markdown"),
          max_message_bytes = 40000L)
@@ -427,4 +429,98 @@ chat_addressed.chat_slack <- function(client, message, ...) {
     # typed the bot's display name without selecting the completion did
     # not mention it, and Slack agrees -- no notification goes out.
     nzchar(body) && grepl(sprintf("<@%s>", id), body, fixed = TRUE)
+}
+
+#' @export
+chat_channels.chat_slack <- function(client, ...) {
+    api <- client$api_fn %||% slackr::call_slack_api
+    out <- character()
+    cursor <- ""
+    repeat {
+        args <- list("/api/conversations.list", .method = "GET",
+                     token = client$token, limit = 200L,
+                     types = "public_channel,private_channel")
+        if (nzchar(cursor)) {
+            args$cursor <- cursor
+        }
+        body <- slack_body(do.call(api, args))
+        slack_stop_for_error(body, "conversations.list")
+        for (ch in body$channels %||% list()) {
+            # Only the ones this bot is in. conversations.list reports
+            # every channel the workspace has, and a consumer reading
+            # this as "where I can post" would fan out across the org.
+            if (isTRUE(ch$is_member)) {
+                out <- c(out, as.character(ch$id))
+            }
+        }
+        cursor <- body$response_metadata$next_cursor %||% ""
+        if (!nzchar(cursor)) {
+            break
+        }
+    }
+    out
+}
+
+#' @export
+chat_history.chat_slack <- function(client, channel, limit = 50L,
+                                    before = NULL, ...) {
+    api <- client$api_fn %||% slackr::call_slack_api
+    args <- list("/api/conversations.history", .method = "GET",
+                 token = client$token, channel = sub("^#", "", channel),
+                 limit = as.integer(limit))
+    if (!is.null(before)) {
+        args$latest <- before
+        args$inclusive <- FALSE
+    }
+    body <- slack_body(do.call(api, args))
+    slack_stop_for_error(body, "conversations.history")
+    msgs <- body$messages %||% list()
+    # Slack pages backwards too, newest first. The contract promises the
+    # other order.
+    msgs <- rev(msgs)
+    out <- list()
+    for (m in msgs) {
+        # Joins, leaves, channel renames. They carry a subtype and are
+        # not conversation.
+        if (!is.null(m$subtype)) {
+            next
+        }
+        ts <- suppressWarnings(as.numeric(m$ts))
+        out[[length(out) + 1L]] <- chat_message(
+            id = as.character(m$ts),
+            channel = as.character(channel),
+            sender = as.character(m$user %||% m$bot_id %||% ""),
+            body = as.character(m$text %||% ""),
+            ts = if (is.na(ts)) as.POSIXct(NA) else
+            as.POSIXct(ts, origin = "1970-01-01"),
+            markup = "plain", kind = "message",
+            thread = m$thread_ts, raw = m)
+    }
+    out
+}
+
+#' @export
+chat_mark_read.chat_slack <- function(client, channel, message_id, ...) {
+    ok <- tryCatch({
+        api <- client$api_fn %||% slackr::call_slack_api
+        resp <- api("/api/conversations.mark", .method = "POST",
+                    token = client$token,
+                    body = list(channel = sub("^#", "", channel), ts = message_id))
+        slack_stop_for_error(resp, "conversations.mark")
+        TRUE
+    }, error = function(e) FALSE)
+    invisible(ok)
+}
+
+#' @export
+chat_set_identity.chat_slack <- function(client, display, ...) {
+    api <- client$api_fn %||% slackr::call_slack_api
+    resp <- api("/api/users.profile.set", .method = "POST",
+                token = client$token,
+                body = list(profile = sprintf('{"display_name":"%s"}',
+                gsub('"', '\\\\"', display))))
+    slack_stop_for_error(resp, "users.profile.set")
+    # The cached identity carries a display name, and it is now wrong.
+    client$env$whoami <- NULL
+    invisible(TRUE)
 }

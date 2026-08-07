@@ -537,3 +537,186 @@ identity_mentioned <- function(id, message) {
 escape_rx <- function(x) {
     gsub("([][{}()+*^$|\\\\?.])", "\\\\\\1", x)
 }
+
+#' List the channels this client is in
+#'
+#' The state half of the contract. \code{\link{chat_poll}} answers "what
+#' changed since my cursor"; this and its siblings answer "what is true
+#' now", which is the question a process asks when it starts up with no
+#' useful cursor at all.
+#'
+#' @param client A \code{chat_client}.
+#' @param ... Adapter-specific options.
+#' @return Character vector of channel identifiers.
+#' @examples
+#' chat_channels(chat_loopback())
+#' @export
+chat_channels <- function(client, ...) {
+    UseMethod("chat_channels")
+}
+
+#' @export
+chat_channels.default <- function(client, ...) {
+    stop("chat_channels() is not supported by this adapter (",
+         paste(class(client), collapse = "/"),
+         "). Check chat_capabilities()$channels.", call. = FALSE)
+}
+
+#' Read a channel's recent messages
+#'
+#' Independent of the poll cursor: a restarted process uses this to
+#' recover the context it lost, and asking for it must not move the
+#' cursor or consume anything.
+#'
+#' @param client A \code{chat_client}.
+#' @param channel Channel/room identifier.
+#' @param limit Maximum messages to return.
+#' @param before Return messages older than this message id, for paging
+#'   backwards; NULL starts from the most recent.
+#' @param ... Adapter-specific options.
+#' @return A list of \code{\link{chat_message}}, oldest first.
+#'
+#' @section Order:
+#' Chronological, oldest first, whatever the platform's native direction
+#' is. Matrix \code{dir = "b"} and Slack \code{conversations.history}
+#' both hand back newest-first and every consumer replaying history into
+#' a transcript has to flip it. One flip in the adapter beats one per
+#' consumer, and a consumer that gets it wrong produces a transcript
+#' that reads backwards without erroring.
+#'
+#' @section Overlap with chat_poll:
+#' The same message can arrive from both, and adapters must return the
+#' same \code{id} for it either way. That id is the only thing a consumer
+#' has to deduplicate on -- a startup backfill and the first poll after
+#' it routinely cover the same events.
+#' @examples
+#' cl <- chat_loopback()
+#' chat_send(cl, "general", "hello")
+#' chat_history(cl, "general")
+#' @export
+chat_history <- function(client, channel, limit = 50L, before = NULL, ...) {
+    UseMethod("chat_history")
+}
+
+#' @export
+chat_history.default <- function(client, channel, limit = 50L, before = NULL,
+                                 ...) {
+    stop("chat_history() is not supported by this adapter (",
+         paste(class(client), collapse = "/"),
+         "). Check chat_capabilities()$history.", call. = FALSE)
+}
+
+#' Read standing state that is not tied to a cursor
+#'
+#' Today: pending invitations. \code{\link{chat_poll}} reports an
+#' invitation when it arrives, which is no help to a client that was not
+#' running at the time -- and some homeservers only report invites newer
+#' than the \code{since} token, so the poll loop never sees them again.
+#'
+#' This is a separate verb rather than a mode of \code{\link{chat_poll}}
+#' deliberately. Overloading the cursor would make "start from nothing"
+#' and "tell me what is standing" the same call, and a client that asked
+#' for pending invitations and thereby reset its read position would
+#' replay every channel it is in.
+#'
+#' @param client A \code{chat_client}.
+#' @param ... Adapter-specific options.
+#' @return A list with \code{invites}, a list of \code{\link{chat_invite}}.
+#' @examples
+#' \dontrun{
+#' pending <- chat_pending(client)
+#' for (iv in pending$invites) chat_join(client, iv$channel)
+#' }
+#' @export
+chat_pending <- function(client, ...) {
+    UseMethod("chat_pending")
+}
+
+#' @export
+chat_pending.default <- function(client, ...) {
+    stop("chat_pending() is not supported by this adapter (",
+         paste(class(client), collapse = "/"),
+         "). Check chat_capabilities()$pending.", call. = FALSE)
+}
+
+#' Mark a message as read
+#'
+#' The default is a quiet FALSE, on \code{\link{chat_typing}}'s
+#' reasoning rather than \code{\link{chat_react}}'s: a read marker that
+#' does not appear costs a human a little context about what the bot has
+#' seen, and nothing more. Nobody is waiting on it the way they wait on
+#' an acknowledgement.
+#'
+#' Write-only. Reading other participants' read state is a much larger
+#' surface -- per-user, per-device, and absent entirely on some
+#' platforms -- and no consumer needs it yet.
+#'
+#' @param client A \code{chat_client}.
+#' @param channel Channel/room identifier.
+#' @param message_id The message to mark read, and everything before it.
+#' @param ... Adapter-specific options.
+#' @return TRUE if the marker was sent, FALSE otherwise, invisibly.
+#' @export
+chat_mark_read <- function(client, channel, message_id, ...) {
+    UseMethod("chat_mark_read")
+}
+
+#' @export
+chat_mark_read.default <- function(client, channel, message_id, ...) {
+    invisible(FALSE)
+}
+
+#' Set this client's persistent identity
+#'
+#' The account's own display name, as everyone in every channel sees it
+#' until it is changed again. Distinct from \code{\link{chat_send}}'s
+#' \code{identity} argument, which decorates a single message on
+#' platforms that allow it.
+#'
+#' Owning this matters beyond tidiness. On Matrix the rename is an
+#' authenticated call that can rotate the access token underneath the
+#' caller, and a consumer that made that call itself had to notice the
+#' rotation and get the new token back into its client -- usually via
+#' whatever file both of them happened to share. Behind the contract the
+#' rotation lands in the client that performed it, and nothing outside
+#' has to know it happened.
+#'
+#' @param client A \code{chat_client}.
+#' @param display New display name.
+#' @param ... Adapter-specific options.
+#' @return TRUE if the identity was changed, invisibly.
+#' @export
+chat_set_identity <- function(client, display, ...) {
+    UseMethod("chat_set_identity")
+}
+
+#' @export
+chat_set_identity.default <- function(client, display, ...) {
+    stop("chat_set_identity() is not supported by this adapter (",
+         paste(class(client), collapse = "/"),
+         "). Check chat_capabilities()$set_identity.", call. = FALSE)
+}
+
+#' Refresh this client's credentials
+#'
+#' Forces the re-authentication that adapters otherwise perform on
+#' demand. The refreshed credentials stay inside the client.
+#'
+#' The default throws rather than returning quietly. "I could not
+#' refresh" and "there was nothing to refresh" look identical to a
+#' caller that gets FALSE, and the first means the next call will fail
+#' with a stale token.
+#'
+#' @param client A \code{chat_client}.
+#' @param ... Adapter-specific options.
+#' @return TRUE, invisibly.
+#' @export
+chat_relogin <- function(client, ...) {
+    UseMethod("chat_relogin")
+}
+
+#' @export
+chat_relogin.default <- function(client, ...) {
+    stop("chat_relogin() is not supported by this adapter (",
+         paste(class(client), collapse = "/"), ").", call. = FALSE)
+}

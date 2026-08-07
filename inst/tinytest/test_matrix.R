@@ -7,9 +7,17 @@
 
 # device_id is here because an Olm account belongs to a device: an e2ee
 # client refuses a config that cannot name one.
+#
+# token, because mx_client_session() refuses a config without one and
+# every mx.api-backed method builds a session before calling out. It was
+# missing here for a long time and nothing noticed: R hands the session
+# to the seam as a promise, and no seam double reads its session
+# argument, so mx_client_session() never actually ran. The methods force
+# it now, which is what production does the instant the real mx.api
+# function touches it.
 fake_mx <- function(sync_token = NULL, user_id = "@bot:ex",
                     device_id = "DEV1") {
-    list(user_id = user_id, server = "https://ex.invalid",
+    list(user_id = user_id, server = "https://ex.invalid", token = "tok",
          device_id = device_id, sync_token = sync_token)
 }
 
@@ -172,14 +180,22 @@ trace5$extract <- list()
 chat_poll(seam_client(record = trace5, save_cursor = FALSE))
 expect_false(trace5$sync[[1L]]$save)
 
-# ---- Poll: the post-sync client comes back out ----
-# A relogin can swap the token mid-poll. A consumer that keeps driving
-# mx.api off its own pre-poll copy spends the rest of the cycle
-# authenticating with the token the homeserver just rejected.
-
-expect_true("client" %in% names(got))
-expect_identical(got$client$sync_token, "s1")
-expect_identical(got$client$user_id, "@bot:ex")
+# ---- Poll: the post-sync client stays inside ----
+# It used to come back out. A relogin can swap the token mid-poll, and
+# handing the refreshed config to the caller made the caller responsible
+# for a credential the adapter had already replaced in place -- two
+# copies, in step only because both wrote the same file.
+expect_false("client" %in% names(got))
+# The cursor still reports the post-sync token, which is the one thing a
+# consumer legitimately wanted off that config.
+expect_identical(got$cursor, "s1")
+# And the refreshed credentials are live on the client, so the next call
+# through the contract uses them without anyone passing them along.
+local({
+    cl <- seam_client(token = "rotated")
+    chat_poll(cl)
+    expect_identical(cl$env$mx$sync_token, "rotated")
+})
 
 # ---- Poll: timestamps ----
 # The one field that is silently wrong rather than loudly missing when
@@ -1553,3 +1569,178 @@ local({
 })
 
 expect_true(chat_capabilities(seam_client())$whoami)
+
+# ---- State: channels ----
+local({
+    cl <- seam_client(.channels = function(session) c("!a:ex", "!b:ex"))
+    expect_identical(chat_channels(cl), c("!a:ex", "!b:ex"))
+})
+expect_error(chat_channels(structure(list(), class = c("chat_nothing",
+                                                       "chat_client"))),
+             "not supported by this adapter")
+
+# ---- State: history ----
+hev <- function(id, body = "hi", msgtype = "m.text", ts = 1700000000000,
+                sender = "@ann:ex", mentions = NULL) {
+    content <- list(msgtype = msgtype, body = body)
+    if (!is.null(mentions)) {
+        content[["m.mentions"]] <- list(user_ids = as.list(mentions))
+    }
+    list(type = "m.room.message", event_id = id, sender = sender,
+         origin_server_ts = ts, content = content)
+}
+
+local({
+    seen <- NULL
+    cl <- seam_client(.history = function(session, room_id, ...) {
+        seen <<- c(list(room_id = room_id), list(...))
+        # Newest first, the way Matrix pages backwards.
+        list(chunk = list(hev("$3", "third", ts = 3000),
+                          hev("$2", "second", ts = 2000),
+                          hev("$1", "first", ts = 1000)))
+    })
+    h <- chat_history(cl, "!a:ex", limit = 3L)
+    expect_identical(seen$room_id, "!a:ex")
+    expect_identical(seen$dir, "b")
+    expect_identical(seen$limit, 3L)
+    # Oldest first, whatever direction the platform paged in. A consumer
+    # replaying this into a transcript gets a conversation, not its
+    # reverse -- and a reversed transcript reads plausibly enough that
+    # nothing errors.
+    expect_identical(vapply(h, function(m) m$id, character(1)),
+                     c("$1", "$2", "$3"))
+    expect_identical(h[[1L]]$body, "first")
+    expect_identical(h[[1L]]$channel, "!a:ex")
+    expect_true(all(diff(vapply(h, function(m) as.numeric(m$ts),
+                                numeric(1))) > 0))
+})
+
+local({
+    # `before` pages backwards from a known id, and only then.
+    seen <- NULL
+    cl <- seam_client(.history = function(session, room_id, ...) {
+        seen <<- list(...)
+        list(chunk = list())
+    })
+    chat_history(cl, "!a:ex")
+    expect_false("from" %in% names(seen))
+    chat_history(cl, "!a:ex", before = "$9")
+    expect_identical(seen$from, "$9")
+})
+
+local({
+    # A msgtype the contract has no word for is dropped, not renamed.
+    # matrix_kind() answers "message" for anything, so an m.image would
+    # otherwise arrive as a text message whose body is a filename.
+    cl <- seam_client(.history = function(...) {
+        list(chunk = list(hev("$2", "cat.png", msgtype = "m.image"),
+                          hev("$1", "look")))
+    })
+    h <- chat_history(cl, "!a:ex")
+    expect_identical(length(h), 1L)
+    expect_identical(h[[1L]]$id, "$1")
+})
+expect_identical(chat.api:::matrix_kind_strict("m.image"), NA_character_)
+expect_identical(chat.api:::matrix_kind_strict("m.notice"), "notice")
+expect_identical(chat.api:::matrix_kind_strict(NULL), NA_character_)
+
+local({
+    # Non-message state events (joins, topic changes) are not history.
+    cl <- seam_client(.history = function(...) {
+        list(chunk = list(list(type = "m.room.member", event_id = "$m"),
+                          hev("$1", "look")))
+    })
+    expect_identical(length(chat_history(cl, "!a:ex")), 1L)
+})
+
+local({
+    # self and mentions survive the trip, so a consumer can tell its own
+    # backfilled traffic from everyone else's.
+    cl <- seam_client(.history = function(...) {
+        list(chunk = list(hev("$1", "mine", sender = "@bot:ex",
+                              mentions = "@ann:ex")))
+    })
+    h <- chat_history(cl, "!a:ex")
+    expect_true(h[[1L]]$self)
+    expect_identical(h[[1L]]$mentions, "@ann:ex")
+})
+
+# ---- State: pending ----
+local({
+    seen <- NULL
+    cl <- seam_client(.pending = function(session, timeout = NULL, ...) {
+        seen <<- list(timeout = timeout, args = list(...))
+        list(rooms = list(invite = list(`!a:ex` = list(invite_state = list(
+            events = list(list(type = "m.room.member",
+                               sender = "@ann:ex",
+                               state_key = "@bot:ex",
+                               content = list(membership = "invite"))))))))
+    })
+    p <- chat_pending(cl)
+    # timeout 0: a snapshot, not a long poll.
+    expect_identical(seen$timeout, 0L)
+    # And no `since`. That is the whole point -- a homeserver that only
+    # reports invites newer than the cursor never mentions, in the poll
+    # loop, one issued while this client was down.
+    expect_false("since" %in% names(seen$args))
+    expect_identical(length(p$invites), 1L)
+    expect_inherits(p$invites[[1L]], "chat_invite")
+    expect_identical(p$invites[[1L]]$channel, "!a:ex")
+    expect_identical(p$invites[[1L]]$inviter, "@ann:ex")
+})
+
+local({
+    # Nothing pending is an empty list, not NULL: a consumer looping
+    # over it should not have to test for both.
+    cl <- seam_client(.pending = function(...) list(rooms = list(invite = list())))
+    expect_identical(chat_pending(cl)$invites, list())
+})
+
+# ---- State: mark read ----
+local({
+    seen <- NULL
+    cl <- seam_client(.read = function(session, room_id, event_id, ...) {
+        seen <<- list(room_id = room_id, event_id = event_id)
+        TRUE
+    })
+    expect_true(chat_mark_read(cl, "!a:ex", "$1"))
+    expect_identical(seen$room_id, "!a:ex")
+    expect_identical(seen$event_id, "$1")
+})
+
+# A failed receipt is FALSE, not a throw. Unlike a reaction, nobody is
+# waiting on a read marker -- it costs a human a little context about
+# what the bot has seen, and nothing more.
+expect_false(chat_mark_read(seam_client(.read = function(...) stop("boom")),
+                            "!a:ex", "$1"))
+# An adapter without one says nothing rather than failing, for the same
+# reason.
+expect_false(chat_mark_read(structure(list(),
+                                      class = c("chat_nothing", "chat_client")),
+                            "!a:ex", "$1"))
+
+# ---- Credentials: set identity ----
+local({
+    seen <- NULL
+    cl <- seam_client(.identity = function(client, name, ...) {
+        seen <<- list(name = name)
+        TRUE
+    })
+    expect_true(chat_set_identity(cl, "corteza [opus]"))
+    expect_identical(seen$name, "corteza [opus]")
+})
+
+expect_error(chat_set_identity(structure(list(),
+                                         class = c("chat_nothing",
+                                                   "chat_client")), "x"),
+             "not supported by this adapter")
+
+local({
+    caps <- chat_capabilities(seam_client())
+    expect_true(caps$channels)
+    expect_true(caps$history)
+    expect_true(caps$mark_read)
+    expect_true(caps$set_identity)
+    expect_true(caps$relogin)
+    expect_identical(caps$pending, chat.api:::matrix_invites_available())
+})

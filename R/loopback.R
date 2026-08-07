@@ -60,6 +60,8 @@ chat_capabilities.chat_loopback <- function(client, ...) {
     list(threads = TRUE, thread_replies = TRUE, edits = FALSE,
          reactions = FALSE, reaction_events = FALSE, channel_info = FALSE,
          members = FALSE, invites = FALSE, join = FALSE, whoami = TRUE,
+         channels = TRUE, history = TRUE, pending = FALSE,
+         mark_read = FALSE, set_identity = FALSE, relogin = FALSE,
          files = FALSE, typing = FALSE, e2ee = FALSE,
          identity_override = TRUE, markup_dialects = c("plain", "markdown"),
          max_message_bytes = NA_integer_)
@@ -71,4 +73,34 @@ chat_whoami.chat_loopback <- function(client, ...) {
     # Fixed rather than configurable, so a consumer's self-check has
     # something stable to compare against across a test.
     chat_identity("loopback")
+}
+
+#' @export
+chat_channels.chat_loopback <- function(client, ...) {
+    unique(vapply(client$env$log, function(m) m$channel, character(1)))
+}
+
+#' @export
+chat_history.chat_loopback <- function(client, channel, limit = 50L,
+                                       before = NULL, ...) {
+    log <- client$env$log
+    keep <- vapply(log, function(m) identical(m$channel, channel), logical(1))
+    log <- log[keep]
+    if (!is.null(before)) {
+        pos <- which(vapply(log, function(m) identical(m$id, before),
+                            logical(1)))
+        if (length(pos)) {
+            if (pos[[1L]] > 1L) {
+                log <- log[seq_len(pos[[1L]] - 1L)]
+            } else {
+                log <- list()
+            }
+        }
+    }
+    # The tail, still oldest-first. limit trims the far end, not the near
+    # one: "the last 20 messages" means the 20 most recent.
+    if (length(log) > limit) {
+        log <- log[seq.int(length(log) - limit + 1L, length(log))]
+    }
+    log
 }
