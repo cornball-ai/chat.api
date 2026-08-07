@@ -822,3 +822,178 @@ expect_identical(names(formals(mx.api::mx_room_topic))[1:2],
                  c("session", "room_id"))
 expect_identical(names(formals(mx.api::mx_room_members))[1:2],
                  c("session", "room_id"))
+
+# ---- Config lifecycle: drift against mx.client's real signatures ----
+# These have no seams: they exist to touch a real file, so there is
+# nothing to fake. Drift detection is the only guard available.
+for (fn in c("mx_client_load", "mx_client_save", "mx_client_config_path",
+             "mx_client_legacy_config_path", "mx_client_configure",
+             "mx_client_relogin", "mx_set_displayname")) {
+    expect_true(is.function(getExportedValue("mx.client", fn)), info = fn)
+}
+expect_true(all(c("app", "path", "env_var") %in%
+                names(formals(mx.client::mx_client_load))))
+expect_true(all(c("client", "app", "path") %in%
+                names(formals(mx.client::mx_client_save))))
+expect_identical(names(formals(mx.client::mx_client_save))[1L], "client")
+expect_true(all(c("server", "user", "password", "room", "app", "path",
+                  "device_id", "extra") %in%
+                names(formals(mx.client::mx_client_configure))))
+
+# ---- chat_config ----
+local({
+    cfg <- chat_config(list(server = "https://ex.invalid", user = "bot",
+                            operators = "@troy:ex"),
+                       app = "demo", path = "/tmp/demo.json")
+    expect_inherits(cfg, "chat_config")
+    # An application's own fields pass through. corteza keeps `bots`,
+    # `operators` and a model preference in the same file, and a loader
+    # that dropped them would make the file unreadable by its owner.
+    expect_identical(cfg$operators, "@troy:ex")
+    expect_identical(attr(cfg, "app"), "demo")
+    expect_identical(attr(cfg, "path"), "/tmp/demo.json")
+    # app and path are attributes, never fields: a field would collide
+    # with an application that already keeps one by that name, and would
+    # be written into the file as though it were part of the config.
+    expect_false("app" %in% names(cfg))
+    expect_false("path" %in% names(cfg))
+    expect_false("app" %in% names(chat.api:::unclass_config(cfg)))
+    expect_null(attr(chat.api:::unclass_config(cfg), "path"))
+})
+
+# print() shows the field names and never the values. A config holds an
+# access token and usually a password, and printing one at a prompt is
+# how it reaches a scrollback, a screenshot, or a pasted bug report.
+local({
+    cfg <- chat_config(list(token = "syt_secret", password = "hunter2"),
+                       path = "/tmp/x.json")
+    out <- paste(capture.output(print(cfg)), collapse = " ")
+    expect_false(grepl("syt_secret", out, fixed = TRUE))
+    expect_false(grepl("hunter2", out, fixed = TRUE))
+    expect_true(grepl("token", out, fixed = TRUE))
+    expect_true(grepl("/tmp/x.json", out, fixed = TRUE))
+})
+
+# ---- Round trip through a real file ----
+local({
+    dir <- tempfile("cfg-")
+    dir.create(dir)
+    on.exit(unlink(dir, recursive = TRUE), add = TRUE)
+    path <- file.path(dir, "matrix.json")
+
+    cfg <- chat_config(list(server = "https://ex.invalid", user = "bot",
+                            token = "tok", user_id = "@bot:ex",
+                            device_id = "DEV1", operators = "@troy:ex"),
+                       path = path)
+    chat_config_save(cfg)
+    expect_true(file.exists(path))
+    # 0600. The file holds an access token.
+    expect_identical(substr(as.character(file.mode(path)), 1L, 3L), "600")
+
+    back <- chat_matrix_config(path = path)
+    expect_inherits(back, "chat_config")
+    expect_identical(back$user_id, "@bot:ex")
+    expect_identical(back$operators, "@troy:ex")
+    # It knows where it came from, so chat_config_save() can write it
+    # back without being told twice.
+    expect_identical(normalizePath(attr(back, "path")), normalizePath(path))
+
+    back$operators <- c("@troy:ex", "@jorge:ex")
+    chat_config_save(back)
+    expect_identical(chat_matrix_config(path = path)$operators,
+                     c("@troy:ex", "@jorge:ex"))
+})
+
+# A config with nowhere to go says so, rather than writing somewhere
+# arbitrary and reporting success.
+expect_error(chat_config_save(chat_config(list(user = "bot"))),
+             "nowhere to write")
+
+# ---- Paths ----
+expect_true(is.character(chat_matrix_config_path("demo")))
+expect_true(nzchar(chat_matrix_config_path("demo")))
+expect_false(identical(chat_matrix_config_path("demo"),
+                       chat_matrix_config_path("demo", legacy = TRUE)))
+local({
+    var <- "CHAT_API_TEST_CONFIG"
+    old <- Sys.getenv(var, unset = NA)
+    on.exit(if (is.na(old)) Sys.unsetenv(var) else
+        do.call(Sys.setenv, stats::setNames(list(old), var)), add = TRUE)
+    do.call(Sys.setenv, stats::setNames(list("/tmp/override.json"), var))
+    expect_identical(chat_matrix_config_path("demo", env_var = var),
+                     "/tmp/override.json")
+})
+
+# ---- A config drives a client ----
+local({
+    cfg <- chat_config(list(server = "https://ex.invalid", user = "bot",
+                            token = "tok", user_id = "@bot:ex",
+                            device_id = "DEV1"))
+    cl <- chat_matrix(mx = cfg, .sync = function(...) NULL,
+                      .extract = function(...) list(),
+                      .send = function(...) "$1", .media = function(...) NULL)
+    expect_identical(chat_whoami(cl)$id, "@bot:ex")
+})
+
+# ---- chat_set_identity picks up a rotation it did not perform ----
+# The rename wraps itself in a relogin that persists a refreshed token
+# before retrying, then returns only TRUE and discards the client it
+# refreshed. So the live token can be on disk and not in memory, and the
+# only way to have it is to read it back. This is what lets a consumer
+# hold one client across a rename instead of rebuilding one per send off
+# a file they both happen to write.
+local({
+    dir <- tempfile("ident-")
+    dir.create(dir)
+    on.exit(unlink(dir, recursive = TRUE), add = TRUE)
+    path <- file.path(dir, "matrix.json")
+
+    cfg <- chat_config(list(server = "https://ex.invalid", user = "bot",
+                            password = "pw", token = "tok",
+                            user_id = "@bot:ex", device_id = "DEV1"),
+                       path = path)
+    chat_config_save(cfg)
+
+    cl <- chat_matrix(mx = cfg, .sync = function(...) NULL,
+                      .extract = function(...) list(),
+                      .send = function(...) "$1", .media = function(...) NULL,
+                      .identity = function(client, name, ...) {
+                          # What a relogin inside the rename does: write
+                          # the new token, report only success.
+                          on_disk <- chat_matrix_config(path = path)
+                          on_disk$token <- "rotated"
+                          chat_config_save(on_disk)
+                          invisible(TRUE)
+                      })
+    expect_identical(cl$env$mx$token, "tok")
+    chat_set_identity(cl, "corteza [opus]")
+    expect_identical(cl$env$mx$token, "rotated")
+})
+
+# And unconditionally, not only when the rename reported success. A
+# relogin whose retry then failed -- rate limit, transient 5xx -- still
+# rotated the token and still wrote it. Reloading only on success is how
+# the next send goes out on the token the homeserver already rejected.
+local({
+    dir <- tempfile("ident-")
+    dir.create(dir)
+    on.exit(unlink(dir, recursive = TRUE), add = TRUE)
+    path <- file.path(dir, "matrix.json")
+    cfg <- chat_config(list(server = "https://ex.invalid", user = "bot",
+                            password = "pw", token = "tok",
+                            user_id = "@bot:ex", device_id = "DEV1"),
+                       path = path)
+    chat_config_save(cfg)
+
+    cl <- chat_matrix(mx = cfg, .sync = function(...) NULL,
+                      .extract = function(...) list(),
+                      .send = function(...) "$1", .media = function(...) NULL,
+                      .identity = function(client, name, ...) {
+                          on_disk <- chat_matrix_config(path = path)
+                          on_disk$token <- "rotated"
+                          chat_config_save(on_disk)
+                          stop("M_LIMIT_EXCEEDED")
+                      })
+    expect_error(chat_set_identity(cl, "x"), "M_LIMIT_EXCEEDED")
+    expect_identical(cl$env$mx$token, "rotated")
+})

@@ -465,3 +465,71 @@ local({
 })
 
 expect_true(chat_capabilities(slack_api_client(function(...) NULL))$whoami)
+
+# ---- History paging ----
+local({
+    seen <- NULL
+    cl <- slack_api_client(function(path, ..., .method, token) {
+        seen <<- c(list(path = path), list(...))
+        list(ok = TRUE,
+             messages = list(
+                 list(ts = "300.0", user = "U1", text = "third"),
+                 list(ts = "200.0", user = "U1", text = "second"),
+                 list(ts = "100.0", user = "U1", text = "first")),
+             response_metadata = list(next_cursor = "c2"))
+    })
+    res <- chat_history(cl, "#lab", limit = 3L)
+    expect_identical(seen$path, "/api/conversations.history")
+    expect_identical(seen$channel, "lab")
+    expect_identical(seen$limit, 3L)
+    # Slack pages backwards too; the contract promises the other order.
+    expect_identical(vapply(res$messages, function(m) m$body, character(1)),
+                     c("first", "second", "third"))
+    expect_identical(res$cursor, "c2")
+    # Slack's own cursor, passed back as a cursor -- not as `latest`. A
+    # message ts would work here and not on Matrix, and the contract's
+    # token has to mean one thing across adapters.
+    chat_history(cl, "lab", cursor = "c2")
+    expect_identical(seen$cursor, "c2")
+    expect_false("latest" %in% names(seen))
+})
+
+# Slack sends "" rather than omitting next_cursor at the end of a
+# channel, and handing "" back to conversations.history is an error
+# rather than a no-op -- so it has to become NULL here.
+local({
+    cl <- slack_api_client(function(...) {
+        list(ok = TRUE, messages = list(list(ts = "1.0", user = "U1",
+                                             text = "only")),
+             response_metadata = list(next_cursor = ""))
+    })
+    expect_null(chat_history(cl, "lab")$cursor)
+})
+local({
+    cl <- slack_api_client(function(...) {
+        list(ok = TRUE, messages = list())
+    })
+    expect_null(chat_history(cl, "lab")$cursor)
+    expect_identical(chat_history(cl, "lab")$messages, list())
+})
+
+# Joins, leaves and channel renames carry a subtype and are not
+# conversation.
+local({
+    cl <- slack_api_client(function(...) {
+        list(ok = TRUE, messages = list(
+            list(ts = "2.0", user = "U1", text = "joined",
+                 subtype = "channel_join"),
+            list(ts = "1.0", user = "U1", text = "real")))
+    })
+    res <- chat_history(cl, "lab")
+    expect_identical(length(res$messages), 1L)
+    expect_identical(res$messages[[1L]]$body, "real")
+})
+
+# A refused call raises rather than reporting an empty channel. Slack
+# says no in the body with HTTP 200, so "no messages" and "you may not
+# read this channel" look identical without the check.
+expect_error(chat_history(slack_api_client(function(...) {
+                 list(ok = FALSE, error = "channel_not_found")
+             }), "lab"), "channel_not_found")

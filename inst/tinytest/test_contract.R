@@ -207,3 +207,72 @@ expect_error(chat_addressed(nothing,
                                          sender = "a", body = "b",
                                          ts = Sys.time())),
              "not supported by this adapter")
+
+# ---- chat_history paging on the reference adapter ----
+# The loopback adapter is what a new adapter gets read as an example, so
+# its cursor is deliberately not a message id. Matrix cannot page by one
+# at all, and a reference implementation that did would teach the wrong
+# contract.
+local({
+    cl <- chat_loopback()
+    for (i in 1:5) {
+        chat_send(cl, "general", sprintf("m%d", i))
+    }
+    chat_send(cl, "other", "elsewhere")
+
+    all <- chat_history(cl, "general")
+    expect_identical(length(all$messages), 5L)
+    # Oldest first, and only this channel's.
+    expect_identical(vapply(all$messages, function(m) m$body, character(1)),
+                     c("m1", "m2", "m3", "m4", "m5"))
+    # Nothing left behind it, so no continuation.
+    expect_null(all$cursor)
+
+    # limit takes the most recent, not the first stored.
+    page1 <- chat_history(cl, "general", limit = 2L)
+    expect_identical(vapply(page1$messages, function(m) m$body, character(1)),
+                     c("m4", "m5"))
+    expect_false(is.null(page1$cursor))
+
+    # Pages run backwards while each page runs forwards.
+    page2 <- chat_history(cl, "general", limit = 2L, cursor = page1$cursor)
+    expect_identical(vapply(page2$messages, function(m) m$body, character(1)),
+                     c("m2", "m3"))
+    page3 <- chat_history(cl, "general", limit = 2L, cursor = page2$cursor)
+    expect_identical(vapply(page3$messages, function(m) m$body, character(1)),
+                     "m1")
+    # The start of the channel: nothing more to ask for.
+    expect_null(page3$cursor)
+
+    # Paging past the start is empty, not an error and not a wrap-around.
+    past <- chat_history(cl, "general", limit = 2L, cursor = 99L)
+    expect_identical(past$messages, list())
+    expect_null(past$cursor)
+
+    # Every page put together is the whole channel, once.
+    walked <- character()
+    cur <- NULL
+    # Bounded, not a repeat. A cursor that fails to advance makes this
+    # loop forever, and a hung suite is a worse failure report than a
+    # wrong one: no line number, no diff, just a runner that never
+    # finishes. Ten is generous for five messages two at a time, and
+    # cur being non-NULL at the end is what says the walk did not
+    # terminate on its own.
+    for (i in seq_len(10L)) {
+        pg <- chat_history(cl, "general", limit = 2L, cursor = cur)
+        walked <- c(vapply(pg$messages, function(m) m$body, character(1)),
+                    walked)
+        cur <- pg$cursor
+        if (is.null(cur)) {
+            break
+        }
+    }
+    expect_null(cur)
+    expect_identical(walked, c("m1", "m2", "m3", "m4", "m5"))
+})
+
+# The generic's signature is the contract. `before` took a message id
+# once, which Matrix's /messages cannot use -- it wants a pagination
+# token out of a previous response.
+expect_true("cursor" %in% names(formals(chat_history)))
+expect_false("before" %in% names(formals(chat_history)))

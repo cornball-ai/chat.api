@@ -21,7 +21,12 @@ chat_matrix(
   .react = NULL,
   .info = NULL,
   .members = NULL,
-  .join = NULL
+  .join = NULL,
+  .channels = NULL,
+  .history = NULL,
+  .pending = NULL,
+  .read = NULL,
+  .identity = NULL
 )
 }
 \arguments{
@@ -156,6 +161,22 @@ replacing \code{mx.api::mx_room_name} and
 
 \item{.join}{Testing seam: replacement for
 \code{mx.api::mx_room_join}. Leave NULL in production.}
+
+\item{.channels}{Testing seam: replacement for
+\code{mx.api::mx_rooms}. Leave NULL in production.}
+
+\item{.history}{Testing seam: replacement for
+\code{mx.api::mx_messages}. Leave NULL in production.}
+
+\item{.pending}{Testing seam: replacement for \code{mx.api::mx_sync},
+used by \code{\link{chat_pending}} for its cursorless snapshot.
+Leave NULL in production.}
+
+\item{.read}{Testing seam: replacement for
+\code{mx.api::mx_read_receipt}. Leave NULL in production.}
+
+\item{.identity}{Testing seam: replacement for
+\code{mx.client::mx_set_displayname}. Leave NULL in production.}
 }
 \value{
 A \code{chat_client} of class \code{chat_matrix}.

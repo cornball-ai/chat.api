@@ -126,6 +126,8 @@ chat_capabilities.chat_irc <- function(client, ...) {
     list(threads = FALSE, thread_replies = FALSE, edits = FALSE,
          reactions = FALSE, reaction_events = FALSE, channel_info = FALSE,
          members = FALSE, invites = FALSE, join = FALSE, whoami = TRUE,
+         channels = FALSE, history = FALSE, pending = FALSE,
+         mark_read = FALSE, set_identity = TRUE, relogin = FALSE,
          files = FALSE, typing = FALSE, e2ee = FALSE,
          identity_override = FALSE, markup_dialects = "plain",
          max_message_bytes = 400L)
@@ -133,11 +135,16 @@ chat_capabilities.chat_irc <- function(client, ...) {
 
 #' @export
 chat_whoami.chat_irc <- function(client, ...) {
-    # The nick this client sent in its NICK line. A server that refused
-    # it and assigned another (collision, or a nick longer than the
-    # server allows) has not been read back here -- the 001 welcome
-    # carries the real one, and this adapter does not parse it yet.
-    chat_identity(client$nick)
+    # env first: a chat_set_identity() NICK change during this session
+    # writes there, and the list field is only what this client was
+    # constructed with. Reading the constructor's field would keep
+    # reporting the old nick for the life of the process, so the bot
+    # would stop recognising its own name.
+    #
+    # A server that refused the nick and assigned another (collision, or
+    # one longer than it allows) is invisible either way: the 001
+    # welcome carries the real one and this adapter does not parse it.
+    chat_identity(client$env$nick %||% client$nick)
 }
 
 # What may sit next to a nick without being part of it. IRC nicks are
@@ -168,5 +175,17 @@ chat_addressed.chat_irc <- function(client, message, ...) {
 chat_disconnect.chat_irc <- function(client, ...) {
     tryCatch(irc_write(client$env$con, "QUIT :bye"), error = function(e) NULL)
     tryCatch(close(client$env$con), error = function(e) NULL)
+    invisible(TRUE)
+}
+
+#' @export
+chat_set_identity.chat_irc <- function(client, display, ...) {
+    # IRC has no display name distinct from the nick, so this is a NICK
+    # change. The server can refuse it (collision, length, restricted
+    # characters) and says so asynchronously in a numeric this adapter
+    # does not parse, so the local nick is updated optimistically and
+    # chat_whoami() can be wrong until the next reconnect.
+    irc_write(client$env$con, sprintf("NICK %s", display))
+    client$env$nick <- display
     invisible(TRUE)
 }

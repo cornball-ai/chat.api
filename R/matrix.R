@@ -123,6 +123,17 @@
 #'   \code{mx.api::mx_room_members}. Leave NULL in production.
 #' @param .join Testing seam: replacement for
 #'   \code{mx.api::mx_room_join}. Leave NULL in production.
+#' @param .channels Testing seam: replacement for
+#'   \code{mx.api::mx_rooms}. Leave NULL in production.
+#' @param .history Testing seam: replacement for
+#'   \code{mx.api::mx_messages}. Leave NULL in production.
+#' @param .pending Testing seam: replacement for \code{mx.api::mx_sync},
+#'   used by \code{\link{chat_pending}} for its cursorless snapshot.
+#'   Leave NULL in production.
+#' @param .read Testing seam: replacement for
+#'   \code{mx.api::mx_read_receipt}. Leave NULL in production.
+#' @param .identity Testing seam: replacement for
+#'   \code{mx.client::mx_set_displayname}. Leave NULL in production.
 #' @return A \code{chat_client} of class \code{chat_matrix}.
 #'   \code{\link{chat_poll}} on this class returns \code{first_run} and
 #'   \code{client} alongside \code{messages}, \code{cursor}, and
@@ -138,7 +149,9 @@ chat_matrix <- function(app = NULL, path = NULL, save_cursor = TRUE,
                         crypto_store = NULL, .sync = NULL, .extract = NULL,
                         .send = NULL, .media = NULL, .typing = NULL,
                         .crypto = NULL, .save = NULL, .react = NULL,
-                        .info = NULL, .members = NULL, .join = NULL) {
+                        .info = NULL, .members = NULL, .join = NULL,
+                        .channels = NULL, .history = NULL, .pending = NULL,
+                        .read = NULL, .identity = NULL) {
     seams <- list(.sync, .extract, .send, .media)
     if ((is.null(mx) || any(vapply(seams, is.null, logical(1)))) &&
         !requireNamespace("mx.client", quietly = TRUE)) {
@@ -192,6 +205,9 @@ chat_matrix <- function(app = NULL, path = NULL, save_cursor = TRUE,
                    save_fn = .save,
                    typing_fn = .typing, react_fn = .react,
                    info_fn = .info, members_fn = .members, join_fn = .join,
+                   channels_fn = .channels, history_fn = .history,
+                   pending_fn = .pending, read_fn = .read,
+                   identity_fn = .identity,
                    crypto_ops = matrix_crypto_ops(.crypto)),
               class = c("chat_matrix", "chat_client"))
 }
@@ -317,6 +333,18 @@ matrix_order_by_position <- function(records, positions) {
 matrix_kind <- function(msgtype) {
     switch(msgtype %||% "m.text", m.notice = "notice", m.emote = "emote",
            "message")
+}
+
+# The same mapping, but NA rather than "message" for a msgtype the
+# contract has no word for. chat_poll() can afford the lenient version:
+# its extractor has already filtered to the msgtypes it was asked for.
+# chat_history() reads the timeline raw, so an m.image would otherwise
+# arrive as a "message" whose body is a filename.
+matrix_kind_strict <- function(msgtype) {
+    if (!is.character(msgtype) || length(msgtype) != 1L || is.na(msgtype)) {
+        return(NA_character_)
+    }
+    unname(c(m.text = "message", m.notice = "notice", m.emote = "emote")[msgtype])
 }
 
 # chat_poll's `...` reaches mx_sync_update, so a caller can pass a
@@ -468,8 +496,15 @@ chat_poll.chat_matrix <- function(client, since = NULL, timeout = NULL, ...) {
     # acts on either has the same backfill problem it has with messages
     # and solves it the same way -- what it must not have to learn is
     # that one of the three lists plays by a different rule.
-    list(messages = messages, cursor = res$client$sync_token,
-         first_run = isTRUE(res$first_run), client = res$client,
+    # No `client`. The post-sync config used to be handed back so a
+    # consumer could keep driving mx.api with a token this poll may have
+    # rotated. That made the consumer the owner of a credential the
+    # adapter had already refreshed in place, and the two stayed in step
+    # only because both wrote the same file. Everything that needed it
+    # is a verb now, and the refreshed config is on `client$env$mx`
+    # where the next call will find it.
+    list(messages = messages, cursor = client$env$mx$sync_token,
+         first_run = isTRUE(res$first_run),
          reactions = matrix_reactions(client, res$sync, event_pos),
          invites = matrix_invites(client, res$sync),
          raw = res$sync)
@@ -508,10 +543,20 @@ chat_send.chat_matrix <- function(client, channel, text,
             media_ids <- c(media_ids, as.character(event))
         }
     }
+    # The contract's three kinds, plus a documented way past them: a
+    # kind already spelled as a Matrix msgtype goes out as itself. The
+    # contract has no word for an image or a file, and mapping those to
+    # "m.text" -- which is what the else branch below does to anything
+    # unrecognized -- posts a text message whose body is a filename.
+    # Better a caller that names a Matrix type explicitly than a caller
+    # forced around the contract entirely to send one.
     msgtype <- if (identical(kind, "notice")) {
         "m.notice"
     } else if (identical(kind, "emote")) {
         "m.emote"
+    } else if (is.character(kind) && length(kind) == 1L &&
+        startsWith(kind, "m.")) {
+        kind
     } else {
         "m.text"
     }
@@ -570,8 +615,8 @@ chat_react.chat_matrix <- function(client, channel, message_id, key, ...) {
     # indicator costs nothing; a dropped reaction is an acknowledgement
     # the sender believes it made and no one can see.
     react_fn <- client$react_fn %||% mx.api::mx_react
-    invisible(react_fn(mx.client::mx_client_session(client$env$mx), channel,
-                       message_id, key))
+    sess <- mx.client::mx_client_session(client$env$mx)
+    invisible(react_fn(sess, channel, message_id, key))
 }
 
 #' @export
@@ -600,18 +645,18 @@ chat_join.chat_matrix <- function(client, channel, ...) {
     # Errors propagate. A join that quietly failed leaves the caller
     # believing it is in a room it will never hear a word from, which is
     # indistinguishable from an idle room.
+    sess <- mx.client::mx_client_session(client$env$mx)
     join_fn <- client$join_fn %||% mx.api::mx_room_join
-    invisible(as.character(
-                           join_fn(mx.client::mx_client_session(client$env$mx), channel)))
+    invisible(as.character(join_fn(sess, channel)))
 }
 
 #' @export
 chat_members.chat_matrix <- function(client, channel, ...) {
     # Errors propagate. An empty room and an unanswerable question are
     # different things, and character() has to mean only the first.
+    sess <- mx.client::mx_client_session(client$env$mx)
     members_fn <- client$members_fn %||% mx.api::mx_room_members
-    as.character(members_fn(mx.client::mx_client_session(client$env$mx),
-                            channel))
+    as.character(members_fn(sess, channel))
 }
 
 #' @export
@@ -664,9 +709,11 @@ chat_capabilities.chat_matrix <- function(client, ...) {
          reactions = TRUE, reaction_events = matrix_reactions_available(),
          channel_info = TRUE, members = TRUE,
          invites = matrix_invites_available(), join = TRUE, whoami = TRUE,
-         files = !isTRUE(client$e2ee), typing = TRUE,
-         e2ee = isTRUE(client$e2ee), identity_override = FALSE,
-         markup_dialects = c("plain", "markdown"),
+         channels = TRUE, history = TRUE,
+         pending = matrix_invites_available(), mark_read = TRUE,
+         set_identity = TRUE, relogin = TRUE, files = !isTRUE(client$e2ee),
+         typing = TRUE, e2ee = isTRUE(client$e2ee),
+         identity_override = FALSE, markup_dialects = c("plain", "markdown"),
          max_message_bytes = NA_integer_)
 }
 
@@ -735,4 +782,112 @@ chat_addressed.chat_matrix <- function(client, message, ...) {
     } else {
         a
     }
+}
+
+# mx.client is a Suggests, and the config lifecycle has no seams: unlike
+# poll and send, there is nothing to fake -- these functions exist to
+# touch a real file and a real homeserver.
+matrix_require_client <- function(what) {
+    if (!requireNamespace("mx.client", quietly = TRUE)) {
+        stop(what, "() requires the 'mx.client' package. Install it first.",
+             call. = FALSE)
+    }
+    invisible(TRUE)
+}
+
+#' @export
+chat_channels.chat_matrix <- function(client, ...) {
+    # Built before the call, not inside it. R would otherwise hand the
+    # seam a promise, and a seam that ignores its session argument --
+    # every test double here does -- never forces it. That makes a
+    # config too broken to build a session from look fine under test and
+    # fail only in production, where the real mx.api function reads it.
+    sess <- mx.client::mx_client_session(client$env$mx)
+    fn <- client$channels_fn %||% mx.api::mx_rooms
+    as.character(fn(sess))
+}
+
+#' @export
+chat_history.chat_matrix <- function(client, channel, limit = 50L,
+                                     cursor = NULL, ...) {
+    fn <- client$history_fn %||% mx.api::mx_messages
+    sess <- mx.client::mx_client_session(client$env$mx)
+    args <- list(sess, channel, dir = "b", limit = as.integer(limit))
+    if (!is.null(cursor)) {
+        # /messages `from` is a pagination token out of a previous
+        # response, not an event id. Handing it an event id does not page
+        # from that event -- which is exactly why the contract's cursor
+        # is opaque and comes from here rather than off a message.
+        args$from <- cursor
+    }
+    res <- do.call(fn, args)
+    chunk <- res$chunk %||% list()
+    # Matrix pages backwards, so the chunk arrives newest-first. The
+    # contract promises oldest-first, and this is the one place that
+    # knows which direction it asked for.
+    chunk <- rev(chunk)
+    out <- list()
+    for (ev in chunk) {
+        if (!isTRUE(ev$type == "m.room.message")) {
+            next
+        }
+        msgtype <- ev$content$msgtype %||% ""
+        kind <- matrix_kind_strict(msgtype)
+        if (is.na(kind)) {
+            # A msgtype the contract has no word for -- an image, a
+            # file. Skipping beats inventing a kind: a consumer
+            # replaying history into a transcript would otherwise get an
+            # empty "message" where a picture was.
+            next
+        }
+        ms <- ev$origin_server_ts
+        out[[length(out) + 1L]] <- chat_message(
+            id = as.character(ev$event_id),
+            channel = as.character(channel),
+            sender = as.character(ev$sender %||% ""),
+            body = as.character(ev$content$body %||% ""),
+            ts = if (is.null(ms)) as.POSIXct(NA) else
+            as.POSIXct(ms / 1000, origin = "1970-01-01"),
+            markup = "plain", kind = kind,
+            self = identical(ev$sender, client$env$mx$user_id),
+            mentions = unlist(ev$content[["m.mentions"]]$user_ids,
+                              use.names = FALSE),
+            raw = ev)
+    }
+    # `end` continues further back. The spec omits it when there is
+    # nothing older, which is how a consumer paging to the start of a
+    # room knows to stop -- an empty chunk is not the signal, because a
+    # window can be all state events and still have history behind it.
+    list(messages = out, cursor = res$end)
+}
+
+#' @export
+chat_pending.chat_matrix <- function(client, ...) {
+    if (!matrix_invites_available()) {
+        stop("chat_pending() needs an mx.client with ",
+             "mx_extract_invite_records(). Upgrade mx.client.", call. = FALSE)
+    }
+    fn <- client$pending_fn %||% mx.api::mx_sync
+    # No `since`. That is the whole point: a homeserver that only
+    # reports invites newer than the cursor will never mention, in the
+    # poll loop, an invitation issued while this client was down.
+    # timeout 0 makes it a snapshot rather than a long poll.
+    sess <- mx.client::mx_client_session(client$env$mx)
+    sync <- fn(sess, timeout = 0L)
+    recs <- mx.client::mx_extract_invite_records(sync, client$env$mx$user_id)
+    list(invites = lapply(recs, function(r) {
+        chat_invite(channel = as.character(r$room_id),
+                    inviter = r$inviter %||% NA_character_, raw = r)
+    }))
+}
+
+#' @export
+chat_mark_read.chat_matrix <- function(client, channel, message_id, ...) {
+    ok <- tryCatch({
+        fn <- client$read_fn %||% mx.api::mx_read_receipt
+        sess <- mx.client::mx_client_session(client$env$mx)
+        fn(sess, channel, message_id)
+        TRUE
+    }, error = function(e) FALSE)
+    invisible(ok)
 }
