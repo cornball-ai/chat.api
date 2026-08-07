@@ -175,7 +175,8 @@ chat_send.chat_slack <- function(client, channel, text,
                                  markup = c("plain", "markdown"),
                                  thread = NULL, reply_to = NULL,
                                  identity = NULL, files = NULL,
-                                 kind = "message", notify = TRUE, ...) {
+                                 kind = "message", notify = TRUE,
+                                 rich = NULL, ...) {
     markup <- match.arg(markup)
     name_override <- if (is.null(identity$name)) {
         client$username
@@ -376,7 +377,7 @@ chat_capabilities.chat_slack <- function(client, ...) {
     # chat_reaction() from that a consumer could deduplicate across polls.
     # Reading them as events needs the Events API or Socket Mode, which is
     # a different transport than this one.
-    list(threads = TRUE, thread_replies = FALSE, edits = FALSE,
+    list(threads = TRUE, thread_replies = FALSE, edits = TRUE,
          reactions = TRUE, reaction_events = FALSE, channel_info = TRUE,
          members = TRUE,
          # A Slack bot is added to a channel rather than invited, and
@@ -387,7 +388,8 @@ chat_capabilities.chat_slack <- function(client, ...) {
          channels = TRUE, history = TRUE, pending = FALSE,
          mark_read = TRUE, set_identity = TRUE, relogin = FALSE,
          files = FALSE, typing = FALSE, e2ee = FALSE,
-         identity_override = TRUE, markup_dialects = c("plain", "markdown"),
+         identity_override = TRUE, rich_markup = character(),
+         markup_dialects = c("plain", "markdown"),
          max_message_bytes = 40000L)
 }
 
@@ -533,4 +535,21 @@ chat_set_identity.chat_slack <- function(client, display, ...) {
     # The cached identity carries a display name, and it is now wrong.
     client$env$whoami <- NULL
     invisible(TRUE)
+}
+
+#' @export
+chat_edit.chat_slack <- function(client, channel, message_id, text,
+                                 markup = c("plain", "markdown"),
+                                 rich = NULL, ...) {
+    markup <- match.arg(markup)
+    api <- client$api_fn %||% slackr::call_slack_api
+    resp <- api("/api/chat.update", .method = "POST", token = client$token,
+                body = list(channel = sub("^#", "", channel), ts = message_id,
+                            text = slack_render(text, markup)))
+    slack_stop_for_error(resp, "chat.update")
+    # Slack edits in place, so the identifier is the one that went in.
+    # Matrix mints a new event for the edit and returns that instead --
+    # the contract promises "the id of the thing that happened", not
+    # that the two adapters agree on which thing that is.
+    invisible(message_id)
 }

@@ -134,6 +134,10 @@
 #'   \code{mx.api::mx_read_receipt}. Leave NULL in production.
 #' @param .identity Testing seam: replacement for
 #'   \code{mx.client::mx_set_displayname}. Leave NULL in production.
+#' @param .rich Testing seam: replacement for \code{mx.api::mx_send} on
+#'   the rich-send path. Leave NULL in production.
+#' @param .edit Testing seam: replacement for \code{mx.api::mx_send} on
+#'   the edit path. Leave NULL in production.
 #' @return A \code{chat_client} of class \code{chat_matrix}.
 #'   \code{\link{chat_poll}} on this class returns \code{first_run} and
 #'   \code{client} alongside \code{messages}, \code{cursor}, and
@@ -151,7 +155,8 @@ chat_matrix <- function(app = NULL, path = NULL, save_cursor = TRUE,
                         .crypto = NULL, .save = NULL, .react = NULL,
                         .info = NULL, .members = NULL, .join = NULL,
                         .channels = NULL, .history = NULL, .pending = NULL,
-                        .read = NULL, .identity = NULL) {
+                        .read = NULL, .identity = NULL, .edit = NULL,
+                        .rich = NULL) {
     seams <- list(.sync, .extract, .send, .media)
     if ((is.null(mx) || any(vapply(seams, is.null, logical(1)))) &&
         !requireNamespace("mx.client", quietly = TRUE)) {
@@ -207,7 +212,8 @@ chat_matrix <- function(app = NULL, path = NULL, save_cursor = TRUE,
                    info_fn = .info, members_fn = .members, join_fn = .join,
                    channels_fn = .channels, history_fn = .history,
                    pending_fn = .pending, read_fn = .read,
-                   identity_fn = .identity,
+                   identity_fn = .identity, edit_fn = .edit,
+                   rich_fn = .rich,
                    crypto_ops = matrix_crypto_ops(.crypto)),
               class = c("chat_matrix", "chat_client"))
 }
@@ -515,7 +521,8 @@ chat_send.chat_matrix <- function(client, channel, text,
                                   markup = c("plain", "markdown"),
                                   thread = NULL, reply_to = NULL,
                                   identity = NULL, files = NULL,
-                                  kind = "message", notify = TRUE, ...) {
+                                  kind = "message", notify = TRUE,
+                                  rich = NULL, ...) {
     markup <- match.arg(markup)
     # Resolved before anything is uploaded or posted. The encryption
     # question used to be asked after the attachment loop had already run,
@@ -574,10 +581,23 @@ chat_send.chat_matrix <- function(client, channel, text,
         # markdown send renders the same either way. Only the envelope
         # differs.
         if (encrypted) {
+            # rich is dropped here rather than refused. crypto_ops$send()
+            # takes text, msgtype, markdown and mentions, and builds its
+            # own HTML from the markdown -- there is nowhere in that
+            # shape for a caller's fragment. The text still arrives, and
+            # chat_capabilities()$rich_markup is empty on an e2ee client
+            # so a consumer can know beforehand.
             event <- client$crypto_ops$send(crypto, client$env$mx, channel,
                 text, msgtype = msgtype,
                 markdown = identical(markup, "markdown"),
                 mentions = list(...)$mentions)
+            return(invisible(c(media_ids, as.character(event))))
+        }
+        if (!is.null(rich)) {
+            # A different function, because mx_send_text() renders its
+            # own HTML from markdown and has no argument for a supplied
+            # one. mx_send() takes the content wholesale.
+            event <- matrix_send_rich(client, channel, text, rich, msgtype)
             return(invisible(c(media_ids, as.character(event))))
         }
         event <- client$send_fn(client$env$mx, text, room = channel,
@@ -705,7 +725,11 @@ chat_capabilities.chat_matrix <- function(client, ...) {
     # adapter has no encrypted-attachment path, so chat_send() refuses
     # attachments to an encrypted room. TRUE would advertise something
     # that fails in exactly the rooms such a client exists for.
-    list(threads = FALSE, thread_replies = FALSE, edits = FALSE,
+    list(threads = FALSE, thread_replies = FALSE,
+         # Refused in encrypted rooms: an edit carries its replacement
+         # text in an ordinary event, and there is no Megolm path that
+         # can carry a relation. Same bargain as files.
+         edits = !isTRUE(client$e2ee),
          reactions = TRUE, reaction_events = matrix_reactions_available(),
          channel_info = TRUE, members = TRUE,
          invites = matrix_invites_available(), join = TRUE, whoami = TRUE,
@@ -713,7 +737,11 @@ chat_capabilities.chat_matrix <- function(client, ...) {
          pending = matrix_invites_available(), mark_read = TRUE,
          set_identity = TRUE, relogin = TRUE, files = !isTRUE(client$e2ee),
          typing = TRUE, e2ee = isTRUE(client$e2ee),
-         identity_override = FALSE, markup_dialects = c("plain", "markdown"),
+         identity_override = FALSE,
+         # Empty on an e2ee client: the Megolm path builds its own HTML
+         # from markdown and has nowhere to put a supplied fragment.
+         rich_markup = if (isTRUE(client$e2ee)) character() else "html",
+         markup_dialects = c("plain", "markdown"),
          max_message_bytes = NA_integer_)
 }
 
@@ -890,4 +918,74 @@ chat_mark_read.chat_matrix <- function(client, channel, message_id, ...) {
         TRUE
     }, error = function(e) FALSE)
     invisible(ok)
+}
+
+#' @export
+chat_edit.chat_matrix <- function(client, channel, message_id, text,
+                                  markup = c("plain", "markdown"),
+                                  rich = NULL, ...) {
+    markup <- match.arg(markup)
+    # Refused in encrypted rooms, and chat_capabilities() reports
+    # edits = FALSE on an e2ee client to match -- the same bargain
+    # attachments get.
+    #
+    # An edit is an ordinary m.room.message carrying m.new_content, so
+    # sending one the plain way puts the replacement text on the
+    # homeserver in the clear, in a room whose whole point is that it is
+    # not. The Megolm path cannot carry it either: crypto_ops$send()
+    # takes text, msgtype, markdown and mentions, and there is nowhere in
+    # that shape to put a relation.
+    crypto <- matrix_crypto_require(client)
+    if (!is.null(crypto) &&
+        client$crypto_ops$encrypted(crypto, client$env$mx, channel)) {
+        stop("chat.api: cannot edit a message in the encrypted room ",
+             channel, ". An edit carries the replacement text in an ",
+             "ordinary event, and posting one would put it on the ",
+             "homeserver in the clear.", call. = FALSE)
+    }
+    sess <- mx.client::mx_client_session(client$env$mx)
+    fn <- client$edit_fn %||% mx.api::mx_send
+    html <- if (identical(markup, "markdown")) {
+        mx.client::mx_markdown_to_html(text)
+    } else {
+        NULL
+    }
+    new_content <- list(msgtype = "m.text", body = text)
+    # A supplied fragment wins over one rendered from markdown: the
+    # caller has markup the renderer cannot express, which is the only
+    # reason to pass one.
+    if (!is.null(rich)) {
+        html <- rich
+    }
+    if (!is.null(html)) {
+        new_content$format <- "org.matrix.custom.html"
+        new_content$formatted_body <- html
+    }
+    extra <- list(`m.new_content` = new_content,
+                  `m.relates_to` = list(rel_type = "m.replace", event_id = message_id))
+    if (!is.null(html)) {
+        extra$format <- "org.matrix.custom.html"
+        # The "* " prefix is the convention for the fallback copy: a
+        # client too old to understand m.replace renders this event as
+        # an ordinary message, and the asterisk is what tells a reader
+        # it is a correction rather than the bot repeating itself.
+        extra$formatted_body <- paste0("* ", html)
+    }
+    invisible(as.character(fn(sess, channel, paste0("* ", text),
+                              msgtype = "m.text", extra = extra)))
+}
+
+# A send carrying a caller-supplied HTML fragment. mx_send_text() builds
+# formatted_body itself out of markdown and takes no argument for one
+# already rendered, so this goes through mx_send(), which takes the
+# content wholesale.
+#
+# text is still the body. Matrix's own model is a plain body plus an
+# optional formatted one, and a client that cannot render the markup --
+# or a push notification, which never does -- shows the body.
+matrix_send_rich <- function(client, channel, text, rich, msgtype) {
+    sess <- mx.client::mx_client_session(client$env$mx)
+    fn <- client$rich_fn %||% mx.api::mx_send
+    fn(sess, channel, text, msgtype = msgtype,
+        extra = list(format = "org.matrix.custom.html", formatted_body = rich))
 }

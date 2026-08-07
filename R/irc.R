@@ -89,7 +89,8 @@ chat_send.chat_irc <- function(client, channel, text,
                                markup = c("plain", "markdown"),
                                thread = NULL, reply_to = NULL,
                                identity = NULL, files = NULL,
-                               kind = "message", notify = TRUE, ...) {
+                               kind = "message", notify = TRUE, rich = NULL,
+                               ...) {
     markup <- match.arg(markup)
     verb <- if (identical(kind, "notice")) {
         "NOTICE"
@@ -129,8 +130,8 @@ chat_capabilities.chat_irc <- function(client, ...) {
          channels = FALSE, history = FALSE, pending = FALSE,
          mark_read = FALSE, set_identity = TRUE, relogin = FALSE,
          files = FALSE, typing = FALSE, e2ee = FALSE,
-         identity_override = FALSE, markup_dialects = "plain",
-         max_message_bytes = 400L)
+         identity_override = FALSE, rich_markup = character(),
+         markup_dialects = "plain", max_message_bytes = 400L)
 }
 
 #' @export
