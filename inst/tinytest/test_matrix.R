@@ -1534,11 +1534,21 @@ local({
     expect_false(chat_addressed(cl, msg("hi @axbot")))
 })
 
-# A user_id that is not shaped like one has no localpart to match, and
-# the empty string must not become a pattern that matches everywhere.
+# A user_id that is not shaped like one has no localpart to match. The
+# empty string it yields must not reach the pattern: "@" with nothing
+# after it matches a bare @ anywhere, so every message carrying an email
+# address would read as a mention.
+expect_identical(chat.api:::matrix_localpart("bot"), "")
+expect_identical(chat.api:::matrix_localpart("@bot"), "")
+expect_identical(chat.api:::matrix_localpart("@bot:ex.org"), "bot")
+expect_identical(chat.api:::matrix_localpart("@bot:ex.org:8448"), "bot")
 local({
     cl <- seam_client(mx = fake_mx(user_id = "bot"))
+    expect_false(chat_addressed(cl, msg("reach me @ 5pm")))
+    expect_false(chat_addressed(cl, msg("ann@ex.org wrote in")))
     expect_false(chat_addressed(cl, msg("anything at all")))
+    # The id itself is still matched literally, which is the most a
+    # malformed one supports.
     expect_true(chat_addressed(cl, msg("bot")))
 })
 
