@@ -1474,3 +1474,82 @@ local({
     expect_true(caps$join)
     expect_identical(caps$invites, chat.api:::matrix_invites_available())
 })
+
+# ---- Identity ----
+msg <- function(body = "", mentions = NULL) {
+    chat_message(id = "$1", channel = "!a:ex", sender = "@ann:ex",
+                 body = body, ts = Sys.time(), mentions = mentions)
+}
+
+local({
+    who <- chat_whoami(seam_client())
+    expect_inherits(who, "chat_identity")
+    expect_identical(who$id, "@bot:ex")
+    # The device id rides along in raw, the access token does not. An
+    # identity record is the kind of thing a consumer prints.
+    expect_identical(who$raw$device_id, "DEV1")
+    expect_false("access_token" %in% names(who$raw))
+    expect_true(is.na(who$display))
+})
+
+# A config with no user_id cannot say who it is, and says so. Answering
+# NA would make every self-check report "not me" and the bot would reply
+# to itself forever.
+expect_error(chat_whoami(seam_client(mx = fake_mx(user_id = NULL))),
+             "no user_id")
+expect_error(chat_whoami(seam_client(mx = fake_mx(user_id = ""))),
+             "no user_id")
+
+# Declared mentions, the structured signal.
+expect_true(chat_addressed(seam_client(), msg(mentions = "@bot:ex")))
+expect_true(chat_addressed(seam_client(),
+                           msg(mentions = c("@ann:ex", "@bot:ex"))))
+expect_false(chat_addressed(seam_client(), msg(mentions = "@ann:ex")))
+
+# The full user id typed out.
+expect_true(chat_addressed(seam_client(), msg("hey @bot:ex look")))
+
+# The localpart as a word.
+expect_true(chat_addressed(seam_client(), msg("@bot do the thing")))
+expect_true(chat_addressed(seam_client(), msg("well @BOT?")))
+expect_true(chat_addressed(seam_client(), msg("ping @bot")))
+
+# Not a mention: a longer localpart that merely starts the same way.
+# "." and "-" are legal in a localpart, so a \\b boundary ends the word
+# early and hands @bot.deploy's traffic to @bot.
+expect_false(chat_addressed(seam_client(), msg("ask @bot2 instead")))
+expect_false(chat_addressed(seam_client(), msg("ask @bot.deploy instead")))
+expect_false(chat_addressed(seam_client(), msg("ask @bot-staging instead")))
+expect_false(chat_addressed(seam_client(), msg("ask @bot_x instead")))
+
+# Nothing to match on.
+expect_false(chat_addressed(seam_client(), msg("")))
+expect_false(chat_addressed(seam_client(), msg("no one in particular")))
+
+# A localpart carrying regex metacharacters is matched literally, not
+# compiled. "@a.bot" must not match "@axbot".
+local({
+    cl <- seam_client(mx = fake_mx(user_id = "@a.bot:ex"))
+    expect_true(chat_addressed(cl, msg("hi @a.bot")))
+    expect_false(chat_addressed(cl, msg("hi @axbot")))
+})
+
+# A user_id that is not shaped like one has no localpart to match. The
+# empty string it yields must not reach the pattern: "@" with nothing
+# after it matches a bare @ anywhere, so every message carrying an email
+# address would read as a mention.
+expect_identical(chat.api:::matrix_localpart("bot"), "")
+expect_identical(chat.api:::matrix_localpart("@bot"), "")
+expect_identical(chat.api:::matrix_localpart("@bot:ex.org"), "bot")
+expect_identical(chat.api:::matrix_localpart("@bot:ex.org:8448"), "bot")
+local({
+    cl <- seam_client(mx = fake_mx(user_id = "bot"))
+    expect_false(chat_addressed(cl, msg("reach me @ 5pm")))
+    expect_false(chat_addressed(cl, msg("ann@ex.org wrote in")))
+    expect_false(chat_addressed(cl, msg("anything at all")))
+    # The id itself is still matched literally, which is the most a
+    # malformed one supports.
+    expect_true(chat_addressed(cl, msg("bot")))
+})
+
+expect_true(chat_capabilities(seam_client())$whoami)

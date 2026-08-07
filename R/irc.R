@@ -125,9 +125,43 @@ chat_resolve.chat_irc <- function(client, name, ...) {
 chat_capabilities.chat_irc <- function(client, ...) {
     list(threads = FALSE, thread_replies = FALSE, edits = FALSE,
          reactions = FALSE, reaction_events = FALSE, channel_info = FALSE,
-         members = FALSE, invites = FALSE, join = FALSE, files = FALSE,
-         typing = FALSE, e2ee = FALSE, identity_override = FALSE,
-         markup_dialects = "plain", max_message_bytes = 400L)
+         members = FALSE, invites = FALSE, join = FALSE, whoami = TRUE,
+         files = FALSE, typing = FALSE, e2ee = FALSE,
+         identity_override = FALSE, markup_dialects = "plain",
+         max_message_bytes = 400L)
+}
+
+#' @export
+chat_whoami.chat_irc <- function(client, ...) {
+    # The nick this client sent in its NICK line. A server that refused
+    # it and assigned another (collision, or a nick longer than the
+    # server allows) has not been read back here -- the 001 welcome
+    # carries the real one, and this adapter does not parse it yet.
+    chat_identity(client$nick)
+}
+
+# What may sit next to a nick without being part of it. IRC nicks are
+# letters, digits, and "[]\\`_^{|}-", so a plain \\w boundary would let
+# "bot" match inside "bot|away", which is the same person's other client
+# but not the nick that was addressed.
+IRC_NICK_CHARS <- "A-Za-z0-9\\[\\]\\\\`_^{|}-"
+
+#' @export
+chat_addressed.chat_irc <- function(client, message, ...) {
+    nick <- chat_whoami(client)$id
+    if (identity_mentioned(nick, message)) {
+        return(TRUE)
+    }
+    body <- message$body %||% ""
+    if (!nzchar(body)) {
+        return(FALSE)
+    }
+    # IRC has no mention markup at all: addressing someone is a naming
+    # convention ("bot: do the thing"), so the bare nick as a whole word
+    # is the entire signal available.
+    grepl(sprintf("(?<![%s])%s(?![%s])", IRC_NICK_CHARS, escape_rx(nick),
+                  IRC_NICK_CHARS),
+          body, perl = TRUE, ignore.case = TRUE)
 }
 
 #' @export

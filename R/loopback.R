@@ -59,8 +59,16 @@ chat_resolve.chat_loopback <- function(client, name, ...) {
 chat_capabilities.chat_loopback <- function(client, ...) {
     list(threads = TRUE, thread_replies = TRUE, edits = FALSE,
          reactions = FALSE, reaction_events = FALSE, channel_info = FALSE,
-         members = FALSE, invites = FALSE, join = FALSE, files = FALSE,
-         typing = FALSE, e2ee = FALSE, identity_override = TRUE,
-         markup_dialects = c("plain", "markdown"),
+         members = FALSE, invites = FALSE, join = FALSE, whoami = TRUE,
+         files = FALSE, typing = FALSE, e2ee = FALSE,
+         identity_override = TRUE, markup_dialects = c("plain", "markdown"),
          max_message_bytes = NA_integer_)
+}
+
+#' @export
+chat_whoami.chat_loopback <- function(client, ...) {
+    # The sender chat_send() stamps when the caller supplies no identity.
+    # Fixed rather than configurable, so a consumer's self-check has
+    # something stable to compare against across a test.
+    chat_identity("loopback")
 }

@@ -405,3 +405,63 @@ local({
     expect_false(caps$invites)
     expect_true(caps$join)
 })
+
+# ---- Identity ----
+slack_msg <- function(body = "", mentions = NULL) {
+    chat_message(id = "1.1", channel = "lab", sender = "U999",
+                 body = body, ts = Sys.time(), mentions = mentions)
+}
+
+local({
+    seen <- NULL
+    cl <- slack_api_client(function(path, ..., .method, token) {
+        seen <<- list(path = path, .method = .method, token = token)
+        list(ok = TRUE, user_id = "U0BOT", user = "corteza",
+             team = "cornball", bot_id = "B1")
+    })
+    who <- chat_whoami(cl)
+    expect_identical(seen$path, "/api/auth.test")
+    expect_identical(seen$.method, "GET")
+    expect_identical(seen$token, "xoxb-test")
+    expect_identical(who$id, "U0BOT")
+    expect_identical(who$display, "corteza")
+})
+
+# One call per client, not one per message. chat_addressed() asks on
+# every message, and the answer is a property of the token.
+local({
+    calls <- 0L
+    cl <- slack_api_client(function(...) {
+        calls <<- calls + 1L
+        list(ok = TRUE, user_id = "U0BOT", user = "corteza")
+    })
+    chat_whoami(cl)
+    chat_whoami(cl)
+    chat_addressed(cl, slack_msg("hi <@U0BOT>"))
+    expect_identical(calls, 1L)
+})
+
+# Slack refuses in the body with HTTP 200, so an invalid token comes back
+# looking like a successful call that just did not say who we are.
+expect_error(chat_whoami(slack_api_client(function(...) {
+                 list(ok = FALSE, error = "invalid_auth")
+             })), "invalid_auth")
+expect_error(chat_whoami(slack_api_client(function(...) list(ok = TRUE))),
+             "no user_id")
+
+local({
+    cl <- slack_api_client(function(...) list(ok = TRUE, user_id = "U0BOT",
+                                              user = "corteza"))
+    # The ref form Slack stores. There is no plain "@corteza" to find:
+    # the sending client rewrote it before the message existed.
+    expect_true(chat_addressed(cl, slack_msg("hey <@U0BOT> look")))
+    expect_false(chat_addressed(cl, slack_msg("hey @corteza look")))
+    expect_false(chat_addressed(cl, slack_msg("hey <@U0OTHER> look")))
+    # A ref for a longer id that starts the same way is someone else.
+    expect_false(chat_addressed(cl, slack_msg("hey <@U0BOTS> look")))
+    expect_false(chat_addressed(cl, slack_msg("")))
+    # Declared mentions still count, for a poll path that populates them.
+    expect_true(chat_addressed(cl, slack_msg("nothing", mentions = "U0BOT")))
+})
+
+expect_true(chat_capabilities(slack_api_client(function(...) NULL))$whoami)

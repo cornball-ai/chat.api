@@ -97,7 +97,9 @@ chat_resolve <- function(client, name, ...) {
 #'   (\code{\link{chat_channel_info}} works), \code{members}
 #'   (\code{\link{chat_members}} works), \code{invites} (invitations come
 #'   back out of \code{\link{chat_poll}}), \code{join}
-#'   (\code{\link{chat_join}} works), \code{files}, \code{typing},
+#'   (\code{\link{chat_join}} works), \code{whoami}
+#'   (\code{\link{chat_whoami}} works, and with it the default
+#'   \code{\link{chat_addressed}}), \code{files}, \code{typing},
 #'   \code{e2ee}, \code{identity_override} (logicals),
 #'   \code{markup_dialects} (character), \code{max_message_bytes}
 #'   (integer or NA).
@@ -406,4 +408,132 @@ print.chat_message <- function(x, ...) {
     cat(sprintf("[%s] %s in %s: %s\n", format(x$ts, "%H:%M:%S"), x$sender,
                 x$channel, substr(x$body, 1L, 60L)))
     invisible(x)
+}
+
+#' Who is this client logged in as?
+#'
+#' The client's own account, as the transport identifies it.
+#'
+#' The default method throws rather than guessing. Every use of an
+#' identity is a comparison -- is this message mine, did someone address
+#' me -- and a wrong answer to either is silent: the bot answers itself
+#' in a loop, or never answers anyone. An adapter that cannot say who it
+#' is should say so.
+#'
+#' @param client A \code{chat_client}.
+#' @param ... Adapter-specific options.
+#' @return A \code{\link{chat_identity}}.
+#' @examples
+#' chat_whoami(chat_loopback())
+#' @export
+chat_whoami <- function(client, ...) {
+    UseMethod("chat_whoami")
+}
+
+#' @export
+chat_whoami.default <- function(client, ...) {
+    stop("chat_whoami() is not supported by this adapter (",
+         paste(class(client), collapse = "/"), ").", call. = FALSE)
+}
+
+#' Construct an identity record
+#'
+#' @param id The account identifier, in whatever form the transport
+#'   uses. Comparable against \code{\link{chat_message}}'s \code{sender}
+#'   and against the entries of its \code{mentions}: that comparability
+#'   is the point of the field, so an adapter whose two sides disagree
+#'   has a bug here rather than a choice.
+#' @param display Human-readable name, or NA when the adapter would have
+#'   to ask the server for it. Never used for matching -- it is not
+#'   unique, and on most transports any account can set it to any other
+#'   account's. For logs and prompts only.
+#' @param raw The adapter's platform-native identity payload.
+#' @return A list with class \code{chat_identity}.
+#' @examples
+#' chat_identity("@bot:example.org", display = "corteza")
+#' @export
+chat_identity <- function(id, display = NA_character_, raw = NULL) {
+    stopifnot(is.character(id), length(id) == 1L, nzchar(id))
+    structure(list(id = id,
+                   display = if (is.null(display)) NA_character_ else display,
+                   raw = raw),
+              class = "chat_identity")
+}
+
+#' @export
+print.chat_identity <- function(x, ...) {
+    cat(sprintf("%s%s\n", x$id,
+            if (is.na(x$display)) "" else sprintf(" (%s)", x$display)))
+    invisible(x)
+}
+
+#' Does a message address this client?
+#'
+#' Answers the question a bot in a room full of people has to ask before
+#' replying. Two signals feed it, and which ones exist is the adapter's
+#' business rather than the caller's:
+#'
+#' \enumerate{
+#'   \item The message's declared mentions -- Matrix \code{m.mentions},
+#'     a Slack user ref. Structured, unambiguous, and the only signal the
+#'     default method reads.
+#'   \item The plain-text conventions of the transport. Matrix has
+#'     \code{@@bot} and the full user id, Slack has \code{<@U0123>}, IRC
+#'     has a leading \code{nick:}. These are the reason this is a verb
+#'     and not a field: writing the Matrix form into a consumer is how
+#'     that consumer ends up knowing it is talking to Matrix.
+#' }
+#'
+#' The default reads only the declared mentions, so an adapter that does
+#' not override it under-reports rather than over-reports. A bot that
+#' misses being addressed stays quiet; one that thinks it was addressed
+#' when it was not talks over people, and unprompted is worse than
+#' absent.
+#'
+#' @param client A \code{chat_client}.
+#' @param message A \code{\link{chat_message}}.
+#' @param ... Adapter-specific options.
+#' @return \code{TRUE} or \code{FALSE}.
+#' @examples
+#' cl <- chat_loopback()
+#' chat_send(cl, "general", "hi")
+#' chat_addressed(cl, chat_poll(cl)$messages[[1L]])
+#' @export
+chat_addressed <- function(client, message, ...) {
+    UseMethod("chat_addressed")
+}
+
+#' @export
+chat_addressed.default <- function(client, message, ...) {
+    identity_mentioned(chat_whoami(client)$id, message)
+}
+
+#' Is this id among a message's declared mentions?
+#'
+#' The transport-neutral half of \code{\link{chat_addressed}}, shared by
+#' every method so that an adapter overriding the verb adds its
+#' plain-text conventions rather than reimplementing this and getting it
+#' subtly different.
+#' @noRd
+identity_mentioned <- function(id, message) {
+    # Forced before the short circuit below can skip it. The default
+    # method passes chat_whoami(client)$id straight in, and && stops at
+    # an empty mentions list without ever evaluating the promise -- so an
+    # adapter that cannot say who it is quietly answered FALSE to "were
+    # you addressed" instead of raising. Silence is what that bug looks
+    # like from outside, which is also what working looks like.
+    force(id)
+    mentions <- unlist(message$mentions, use.names = FALSE)
+    length(mentions) > 0L && id %in% mentions
+}
+
+#' Escape a literal string for use inside a regular expression
+#'
+#' Identifiers carry regex metacharacters: a Matrix localpart may contain
+#' \code{.}, \code{+} and \code{/}, all legal per the spec. Interpolating
+#' one unescaped turns \code{@@a.bot} into a pattern that also matches
+#' \code{@@axbot}.
+#' @noRd
+escape_rx <- function(x) {
+    gsub("([][{}()+*^$|\\\\?.])", "\\\\\\1", x)
 }
