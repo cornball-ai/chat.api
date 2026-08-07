@@ -1377,3 +1377,100 @@ expect_error(chat_reaction(id = "$r", channel = "!c", sender = "@a",
                            target = NULL, key = "y", ts = as.POSIXct(NA)))
 expect_error(chat_reaction(id = "$r", channel = "!c", sender = "@a",
                            target = "$m", key = NULL, ts = as.POSIXct(NA)))
+
+# ---- Invites ----
+# The last thing corteza read off chat_poll()$raw. It gates on who sent
+# an invitation, so the record has to carry that or the reach-through
+# does not go away.
+
+inv_sync <- function(...) {
+    rooms <- list(...)
+    list(rooms = list(invite = rooms))
+}
+inv_state <- function(sender, self = "@bot:ex") {
+    list(invite_state = list(events = list(
+        list(type = "m.room.member", state_key = self, sender = sender,
+             content = list(membership = "invite")))))
+}
+
+if (requireNamespace("mx.client", quietly = TRUE) &&
+    "mx_extract_invite_records" %in% getNamespaceExports("mx.client")) {
+
+    res <- chat_poll(seam_client(sync = inv_sync(`!a:ex` = inv_state("@ann:ex"))))
+    expect_identical(length(res$invites), 1L)
+    inv <- res$invites[[1L]]
+    expect_inherits(inv, "chat_invite")
+    expect_identical(inv$channel, "!a:ex")
+    expect_identical(inv$inviter, "@ann:ex")
+
+    # An invite whose sender cannot be read reports NA, not a guess and
+    # not a missing field. A consumer gating on the sender has to tell
+    # "someone I do not trust" from "I could not tell" -- both refuse,
+    # for different reasons.
+    res <- chat_poll(seam_client(sync = inv_sync(`!b:ex` = list())))
+    expect_true(is.na(res$invites[[1L]]$inviter))
+    expect_identical(res$invites[[1L]]$channel, "!b:ex")
+
+    # Several at once, in the order the homeserver listed them.
+    res <- chat_poll(seam_client(sync = inv_sync(
+        `!a:ex` = inv_state("@ann:ex"), `!b:ex` = inv_state("@bob:ex"))))
+    expect_identical(vapply(res$invites, function(i) i$channel, character(1)),
+                     c("!a:ex", "!b:ex"))
+
+    # No invites is an empty list, not NULL: a consumer looping over it
+    # should not have to test for both.
+    res <- chat_poll(seam_client(sync = wrap_sync(list(ev("$1")))))
+    expect_identical(res$invites, list())
+    expect_false(is.null(res$invites))
+
+    # An invitation is not a message, and does not appear as one.
+    res <- chat_poll(seam_client(recs = list(rec("$m1")),
+                                 sync = inv_sync(`!a:ex` = inv_state("@ann:ex"))))
+    expect_identical(length(res$messages), 1L)
+    expect_identical(length(res$invites), 1L)
+    expect_identical(res$messages[[1L]]$id, "$m1")
+}
+
+# ---- Joining ----
+local({
+    seen <- NULL
+    cl <- seam_client(.join = function(session, room_id) {
+        seen <<- room_id
+        "!a:ex"
+    })
+    expect_identical(chat_join(cl, "!a:ex"), "!a:ex")
+    expect_identical(seen, "!a:ex")
+})
+
+# A failed join propagates. Silently doing nothing would leave the caller
+# believing it is in a room it will never hear a word from, which looks
+# exactly like an idle room.
+expect_error(chat_join(seam_client(.join = function(...) stop("M_FORBIDDEN")),
+                       "!a:ex"), "M_FORBIDDEN")
+
+# An adapter that cannot join says so.
+expect_error(chat_join(structure(list(), class = c("chat_nothing",
+                                                   "chat_client")), "!a"),
+             "not supported by this adapter")
+
+# ---- The record ----
+iv <- chat_invite(channel = "!a:ex", inviter = "@ann:ex")
+expect_inherits(iv, "chat_invite")
+expect_identical(iv$channel, "!a:ex")
+# The inviter defaults to NA, never NULL: a record that reached a
+# consumer with no inviter field would read as "no gate needed".
+expect_true(is.na(chat_invite(channel = "!a:ex")$inviter))
+expect_true(is.na(chat_invite(channel = "!a:ex", inviter = NULL)$inviter))
+# There is no ts. An invitation is a standing state, and Matrix's
+# stripped invite state carries no reliable origin_server_ts -- a field
+# that could only ever be NA is worse than no field.
+expect_false("ts" %in% names(iv))
+expect_error(chat_invite(channel = NULL))
+
+# ---- Capabilities ----
+local({
+    caps <- chat_capabilities(seam_client())
+    expect_true(is.logical(caps$invites))
+    expect_true(caps$join)
+    expect_identical(caps$invites, chat.api:::matrix_invites_available())
+})

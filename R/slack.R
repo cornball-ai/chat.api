@@ -303,6 +303,20 @@ chat_channel_info.chat_slack <- function(client, channel, ...) {
 }
 
 #' @export
+chat_join.chat_slack <- function(client, channel, ...) {
+    # conversations.join, which works for a public channel the bot is not
+    # in yet. It cannot join a private one: Slack requires a member to add
+    # the bot, and that arrives as no event this adapter can see -- which
+    # is why `invites` is FALSE here while `join` is TRUE.
+    api <- client$api_fn %||% slackr::call_slack_api
+    body <- slack_body(api("/api/conversations.join", .method = "POST",
+                           token = client$token,
+                           body = list(channel = sub("^#", "", channel))))
+    slack_stop_for_error(body, "conversations.join")
+    invisible(sub("^#", "", channel))
+}
+
+#' @export
 chat_members.chat_slack <- function(client, channel, ...) {
     api <- client$api_fn %||% slackr::call_slack_api
     out <- character()
@@ -364,7 +378,13 @@ chat_capabilities.chat_slack <- function(client, ...) {
     # a different transport than this one.
     list(threads = TRUE, thread_replies = FALSE, edits = FALSE,
          reactions = TRUE, reaction_events = FALSE, channel_info = TRUE,
-         members = TRUE, files = FALSE, typing = FALSE, e2ee = FALSE,
+         members = TRUE,
+         # A Slack bot is added to a channel rather than invited, and
+         # conversations.history says nothing about it -- there is no
+         # invitation to hand a consumer. Joining an open channel is a
+         # different thing, and does work.
+         invites = FALSE, join = TRUE,
+         files = FALSE, typing = FALSE, e2ee = FALSE,
          identity_override = TRUE, markup_dialects = c("plain", "markdown"),
          max_message_bytes = 40000L)
 }

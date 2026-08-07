@@ -95,7 +95,9 @@ chat_resolve <- function(client, name, ...) {
 #'   (\code{\link{chat_react}} works), \code{reaction_events} (reactions
 #'   come back out of \code{\link{chat_poll}}), \code{channel_info}
 #'   (\code{\link{chat_channel_info}} works), \code{members}
-#'   (\code{\link{chat_members}} works), \code{files}, \code{typing},
+#'   (\code{\link{chat_members}} works), \code{invites} (invitations come
+#'   back out of \code{\link{chat_poll}}), \code{join}
+#'   (\code{\link{chat_join}} works), \code{files}, \code{typing},
 #'   \code{e2ee}, \code{identity_override} (logicals),
 #'   \code{markup_dialects} (character), \code{max_message_bytes}
 #'   (integer or NA).
@@ -147,6 +149,71 @@ chat_react.default <- function(client, channel, message_id, key, ...) {
     stop("chat_react() is not supported by this adapter (",
          paste(class(client), collapse = "/"),
          "). Check chat_capabilities()$reactions.", call. = FALSE)
+}
+
+#' Join a channel
+#'
+#' Accepts a pending invitation, or joins an open channel where the
+#' platform allows it.
+#'
+#' The default method throws, on the same reasoning as
+#' \code{\link{chat_react}}: a join that silently does nothing leaves the
+#' caller believing it is in a room it will never hear from. Check
+#' \code{chat_capabilities()$join}.
+#'
+#' @param client A \code{chat_client}.
+#' @param channel Channel/room identifier, as carried on a
+#'   \code{\link{chat_invite}}'s \code{channel} or resolved by
+#'   \code{\link{chat_resolve}}.
+#' @param ... Adapter-specific options.
+#' @return The joined channel's identifier, invisibly.
+#' @export
+chat_join <- function(client, channel, ...) {
+    UseMethod("chat_join")
+}
+
+#' @export
+chat_join.default <- function(client, channel, ...) {
+    stop("chat_join() is not supported by this adapter (",
+         paste(class(client), collapse = "/"),
+         "). Check chat_capabilities()$join.", call. = FALSE)
+}
+
+#' Construct a normalized invitation record
+#'
+#' The record \code{\link{chat_poll}} returns in \code{$invites} on
+#' adapters whose \code{chat_capabilities()$invites} is TRUE.
+#'
+#' @param channel Channel/room identifier the client has been invited to
+#'   (character). Pass it to \code{\link{chat_join}} to accept.
+#' @param inviter Who issued the invitation, or \code{NA} when the
+#'   transport does not say. NA rather than NULL, and deliberately: a
+#'   consumer deciding whether to accept has to tell "someone I do not
+#'   trust" from "I could not tell who", and both refuse for different
+#'   reasons. NULL would collapse the second into the absence of a field.
+#' @param raw The adapter's platform-native payload.
+#' @return A list with class \code{chat_invite}.
+#'
+#' @section No timestamp:
+#' Unlike \code{\link{chat_message}} and \code{\link{chat_reaction}},
+#' there is no \code{ts}. An invitation is a standing state rather than
+#' an event at a moment, and Matrix's stripped invite state carries no
+#' reliable \code{origin_server_ts} to report. A field that could only
+#' ever be NA is worse than no field.
+#' @export
+chat_invite <- function(channel, inviter = NA_character_, raw = NULL) {
+    stopifnot(is.character(channel))
+    structure(list(channel = channel,
+                   inviter = if (is.null(inviter)) NA_character_ else inviter,
+                   raw = raw),
+              class = "chat_invite")
+}
+
+#' @export
+print.chat_invite <- function(x, ...) {
+    cat(sprintf("invite to %s from %s\n", x$channel,
+            if (is.na(x$inviter)) "someone unknown" else x$inviter))
+    invisible(x)
 }
 
 #' Describe a channel

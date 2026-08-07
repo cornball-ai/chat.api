@@ -372,3 +372,36 @@ local({
     expect_true(caps$channel_info)
     expect_true(caps$members)
 })
+
+# ---- Joining ----
+# Slack splits what Matrix bundles: a bot is added to a private channel
+# by a member, which arrives as no event this adapter can see, but it can
+# join an open one itself. So `invites` is FALSE and `join` is TRUE --
+# the asymmetry is the point of having two flags.
+
+local({
+    seen <- NULL
+    cl <- slack_api_client(function(path, ..., body = NULL, .method, token) {
+        seen <<- list(path = path, body = body, .method = .method)
+        list(ok = TRUE, channel = list(id = "C1"))
+    })
+    expect_identical(chat_join(cl, "#lab"), "lab")
+    expect_identical(seen$path, "/api/conversations.join")
+    expect_identical(seen$.method, "POST")
+    # In the body, not the dots: call_slack_api() drops dots on POST.
+    expect_identical(seen$body$channel, "lab")
+})
+
+# A refusal is an error, not a silent non-join. "already_in_channel" is
+# not what this returns for -- Slack answers ok = TRUE for that.
+expect_error(chat_join(slack_api_client(function(...) {
+    list(ok = FALSE, error = "channel_not_found")
+}), "lab"), "Slack refused conversations.join: channel_not_found")
+
+local({
+    caps <- chat_capabilities(chat_slack(channels = "lab", token = "t",
+                                         .history = function(...) NULL,
+                                         .post = function(...) "1"))
+    expect_false(caps$invites)
+    expect_true(caps$join)
+})

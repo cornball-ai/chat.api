@@ -121,6 +121,8 @@
 #'   \code{mx.api::mx_room_topic}. Leave NULL in production.
 #' @param .members Testing seam: replacement for
 #'   \code{mx.api::mx_room_members}. Leave NULL in production.
+#' @param .join Testing seam: replacement for
+#'   \code{mx.api::mx_room_join}. Leave NULL in production.
 #' @return A \code{chat_client} of class \code{chat_matrix}.
 #'   \code{\link{chat_poll}} on this class returns \code{first_run} and
 #'   \code{client} alongside \code{messages}, \code{cursor}, and
@@ -136,7 +138,7 @@ chat_matrix <- function(app = NULL, path = NULL, save_cursor = TRUE,
                         crypto_store = NULL, .sync = NULL, .extract = NULL,
                         .send = NULL, .media = NULL, .typing = NULL,
                         .crypto = NULL, .save = NULL, .react = NULL,
-                        .info = NULL, .members = NULL) {
+                        .info = NULL, .members = NULL, .join = NULL) {
     seams <- list(.sync, .extract, .send, .media)
     if ((is.null(mx) || any(vapply(seams, is.null, logical(1)))) &&
         !requireNamespace("mx.client", quietly = TRUE)) {
@@ -189,7 +191,7 @@ chat_matrix <- function(app = NULL, path = NULL, save_cursor = TRUE,
                    # on the deferred-save path, which only e2ee reaches.
                    save_fn = .save,
                    typing_fn = .typing, react_fn = .react,
-                   info_fn = .info, members_fn = .members,
+                   info_fn = .info, members_fn = .members, join_fn = .join,
                    crypto_ops = matrix_crypto_ops(.crypto)),
               class = c("chat_matrix", "chat_client"))
 }
@@ -267,6 +269,29 @@ matrix_reactions <- function(client, sync, positions) {
 matrix_reactions_available <- function() {
     requireNamespace("mx.client", quietly = TRUE) &&
     "mx_extract_reactions" %in% getNamespaceExports("mx.client")
+}
+
+# The sync's pending invites, as contract records.
+#
+# mx_extract_invite_records() carries the inviter, which is the whole of
+# whether an invite should be accepted -- and NA when the stripped state
+# does not say, which a consumer has to be able to tell from a sender it
+# simply does not trust. Passed through unchanged for that reason.
+matrix_invites <- function(client, sync) {
+    if (!matrix_invites_available()) {
+        return(list())
+    }
+    recs <- mx.client::mx_extract_invite_records(sync,
+        self_id = client$env$mx$user_id)
+    lapply(recs, function(r) {
+        chat_invite(channel = as.character(r$room_id), inviter = r$inviter,
+                    raw = r)
+    })
+}
+
+matrix_invites_available <- function() {
+    requireNamespace("mx.client", quietly = TRUE) &&
+    "mx_extract_invite_records" %in% getNamespaceExports("mx.client")
 }
 
 # Sort messages or reactions into sync order, by their own event id.
@@ -433,18 +458,20 @@ chat_poll.chat_matrix <- function(client, since = NULL, timeout = NULL, ...) {
     # own pre-poll copy would spend the rest of the cycle authenticating
     # with the token the homeserver just rejected.
     #
-    # raw carries the full sync response for Matrix-specific consumers
-    # (invites) that the generic contract does not model yet. E2EE and
-    # reactions no longer need it.
+    # raw is the untouched sync response, kept as an escape hatch for
+    # whatever the contract still does not model. Nothing this adapter
+    # reports needs it any more: messages, reactions and invites are all
+    # records.
     #
-    # reactions follows messages exactly: returned on a first run too,
-    # with first_run left to say what they are. A consumer that acts on
-    # reactions has the same backfill problem it has with messages and
-    # solves it the same way -- what it must not have to learn is that
-    # one of the two lists plays by a different rule.
+    # reactions and invites follow messages exactly: returned on a first
+    # run too, with first_run left to say what they are. A consumer that
+    # acts on either has the same backfill problem it has with messages
+    # and solves it the same way -- what it must not have to learn is
+    # that one of the three lists plays by a different rule.
     list(messages = messages, cursor = res$client$sync_token,
          first_run = isTRUE(res$first_run), client = res$client,
          reactions = matrix_reactions(client, res$sync, event_pos),
+         invites = matrix_invites(client, res$sync),
          raw = res$sync)
 }
 
@@ -569,6 +596,16 @@ chat_channel_info.chat_matrix <- function(client, channel, ...) {
 }
 
 #' @export
+chat_join.chat_matrix <- function(client, channel, ...) {
+    # Errors propagate. A join that quietly failed leaves the caller
+    # believing it is in a room it will never hear a word from, which is
+    # indistinguishable from an idle room.
+    join_fn <- client$join_fn %||% mx.api::mx_room_join
+    invisible(as.character(
+                           join_fn(mx.client::mx_client_session(client$env$mx), channel)))
+}
+
+#' @export
 chat_members.chat_matrix <- function(client, channel, ...) {
     # Errors propagate. An empty room and an unanswerable question are
     # different things, and character() has to mean only the first.
@@ -625,9 +662,11 @@ chat_capabilities.chat_matrix <- function(client, ...) {
     # that fails in exactly the rooms such a client exists for.
     list(threads = FALSE, thread_replies = FALSE, edits = FALSE,
          reactions = TRUE, reaction_events = matrix_reactions_available(),
-         channel_info = TRUE, members = TRUE, files = !isTRUE(client$e2ee),
-         typing = TRUE, e2ee = isTRUE(client$e2ee),
-         identity_override = FALSE, markup_dialects = c("plain", "markdown"),
+         channel_info = TRUE, members = TRUE,
+         invites = matrix_invites_available(), join = TRUE,
+         files = !isTRUE(client$e2ee), typing = TRUE,
+         e2ee = isTRUE(client$e2ee), identity_override = FALSE,
+         markup_dialects = c("plain", "markdown"),
          max_message_bytes = NA_integer_)
 }
 
