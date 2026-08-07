@@ -25,7 +25,8 @@ chat_send.chat_loopback <- function(client, channel, text,
                                     markup = c("plain", "markdown"),
                                     thread = NULL, reply_to = NULL,
                                     identity = NULL, files = NULL,
-                                    kind = "message", notify = TRUE, ...) {
+                                    kind = "message", notify = TRUE,
+                                    rich = NULL, ...) {
     markup <- match.arg(markup)
     id <- sprintf("loopback-%d", length(client$env$log) + 1L)
     msg <- chat_message(id = id, channel = channel,
@@ -63,7 +64,8 @@ chat_capabilities.chat_loopback <- function(client, ...) {
          channels = TRUE, history = TRUE, pending = FALSE,
          mark_read = FALSE, set_identity = FALSE, relogin = FALSE,
          files = FALSE, typing = FALSE, e2ee = FALSE,
-         identity_override = TRUE, markup_dialects = c("plain", "markdown"),
+         identity_override = TRUE, rich_markup = character(),
+         markup_dialects = c("plain", "markdown"),
          max_message_bytes = NA_integer_)
 }
 
@@ -116,7 +118,8 @@ chat_history.chat_loopback <- function(client, channel, limit = 50L,
 
 #' @export
 chat_edit.chat_loopback <- function(client, channel, message_id, text,
-                                    markup = c("plain", "markdown"), ...) {
+                                    markup = c("plain", "markdown"),
+                                    rich = NULL, ...) {
     markup <- match.arg(markup)
     pos <- which(vapply(client$env$log,
                         function(m) identical(m$id, message_id), logical(1)))

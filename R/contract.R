@@ -37,6 +37,21 @@ chat_poll <- function(client, since = NULL, timeout = NULL, ...) {
 #' @param files Character vector of file paths to attach, or NULL.
 #' @param kind Message kind; \code{"message"} (default) or an
 #'   adapter-understood alternative (e.g. \code{"notice"}, \code{"emote"}).
+#' @param rich Adapter-native markup for the platforms that accept it,
+#'   or NULL. Matrix takes an HTML fragment and sends it as
+#'   \code{formatted_body}; adapters whose
+#'   \code{chat_capabilities()} is empty ignore it.
+#'
+#'   \code{text} is still required and still has to stand on its own. It
+#'   is what a client that cannot render the markup shows, what a push
+#'   notification carries, and what every other transport gets -- so a
+#'   \code{rich} that holds the real content and a \code{text} that says
+#'   "see above" is a message half the room cannot read.
+#'
+#'   Ignored rather than refused where unsupported, on
+#'   \code{\link{chat_typing}}'s reasoning: the text is the message and
+#'   the markup is decoration, so losing it costs presentation and
+#'   nothing else.
 #' @param notify Logical; FALSE requests a silent delivery where
 #'   supported.
 #' @param ... Adapter-specific options.
@@ -50,7 +65,8 @@ chat_poll <- function(client, since = NULL, timeout = NULL, ...) {
 #' @export
 chat_send <- function(client, channel, text, markup = c("plain", "markdown"),
                       thread = NULL, reply_to = NULL, identity = NULL,
-                      files = NULL, kind = "message", notify = TRUE, ...) {
+                      files = NULL, kind = "message", notify = TRUE,
+                      rich = NULL, ...) {
     UseMethod("chat_send")
 }
 
@@ -772,13 +788,14 @@ chat_relogin.default <- function(client, ...) {
 #' thing to be paged with, a half-finished sentence is not.
 #' @export
 chat_edit <- function(client, channel, message_id, text,
-                      markup = c("plain", "markdown"), ...) {
+                      markup = c("plain", "markdown"), rich = NULL, ...) {
     UseMethod("chat_edit")
 }
 
 #' @export
 chat_edit.default <- function(client, channel, message_id, text,
-                              markup = c("plain", "markdown"), ...) {
+                              markup = c("plain", "markdown"), rich = NULL,
+                              ...) {
     stop("chat_edit() is not supported by this adapter (",
          paste(class(client), collapse = "/"),
          "). Check chat_capabilities()$edits.", call. = FALSE)

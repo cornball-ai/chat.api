@@ -9,6 +9,7 @@ chat_edit(
   message_id,
   text,
   markup = c("plain", "markdown"),
+  rich = NULL,
   ...
 )
 }

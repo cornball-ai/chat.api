@@ -175,7 +175,8 @@ chat_send.chat_slack <- function(client, channel, text,
                                  markup = c("plain", "markdown"),
                                  thread = NULL, reply_to = NULL,
                                  identity = NULL, files = NULL,
-                                 kind = "message", notify = TRUE, ...) {
+                                 kind = "message", notify = TRUE,
+                                 rich = NULL, ...) {
     markup <- match.arg(markup)
     name_override <- if (is.null(identity$name)) {
         client$username
@@ -387,7 +388,8 @@ chat_capabilities.chat_slack <- function(client, ...) {
          channels = TRUE, history = TRUE, pending = FALSE,
          mark_read = TRUE, set_identity = TRUE, relogin = FALSE,
          files = FALSE, typing = FALSE, e2ee = FALSE,
-         identity_override = TRUE, markup_dialects = c("plain", "markdown"),
+         identity_override = TRUE, rich_markup = character(),
+         markup_dialects = c("plain", "markdown"),
          max_message_bytes = 40000L)
 }
 
@@ -537,7 +539,8 @@ chat_set_identity.chat_slack <- function(client, display, ...) {
 
 #' @export
 chat_edit.chat_slack <- function(client, channel, message_id, text,
-                                 markup = c("plain", "markdown"), ...) {
+                                 markup = c("plain", "markdown"),
+                                 rich = NULL, ...) {
     markup <- match.arg(markup)
     api <- client$api_fn %||% slackr::call_slack_api
     resp <- api("/api/chat.update", .method = "POST", token = client$token,

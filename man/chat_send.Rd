@@ -14,6 +14,7 @@ chat_send(
   files = NULL,
   kind = "message",
   notify = TRUE,
+  rich = NULL,
   ...
 )
 }
@@ -43,6 +44,22 @@ adapter-understood alternative (e.g. \code{"notice"}, \code{"emote"}).}
 
 \item{notify}{Logical; FALSE requests a silent delivery where
 supported.}
+
+\item{rich}{Adapter-native markup for the platforms that accept it,
+or NULL. Matrix takes an HTML fragment and sends it as
+\code{formatted_body}; adapters whose
+\code{chat_capabilities()} is empty ignore it.
+
+\code{text} is still required and still has to stand on its own. It
+is what a client that cannot render the markup shows, what a push
+notification carries, and what every other transport gets -- so a
+\code{rich} that holds the real content and a \code{text} that says
+"see above" is a message half the room cannot read.
+
+Ignored rather than refused where unsupported, on
+\code{\link{chat_typing}}'s reasoning: the text is the message and
+the markup is decoration, so losing it costs presentation and
+nothing else.}
 
 \item{...}{Adapter-specific options.}
 }

@@ -1,7 +1,7 @@
 Package: chat.api
 Type: Package
 Title: Transport-Agnostic Chat Contract for R Agents
-Version: 0.0.1.18
+Version: 0.0.1.19
 Date: 2026-08-05
 Authors@R: c(
     person("Troy", "Hernandez", role = c("aut", "cre"),

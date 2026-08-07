@@ -1849,3 +1849,77 @@ expect_error(chat_edit(structure(list(), class = c("chat_nothing",
                                                    "chat_client")),
                        "!a", "$1", "x"),
              "not supported by this adapter")
+
+# ---- Rich markup ----
+# A caller-supplied HTML fragment, for markup the markdown renderer
+# cannot express. mx_markdown_to_html() escapes raw HTML -- correctly,
+# it is a conservative subset -- so <details> can only get into a room
+# this way.
+local({
+    seen <- NULL
+    cl <- seam_client(.rich = function(session, room_id, body, msgtype = "m.text",
+                                       extra = NULL) {
+        seen <<- list(room_id = room_id, body = body, extra = extra)
+        "$rich1"
+    }, send = function(...) stop("must not take the plain path"))
+    id <- chat_send(cl, "!a:ex", "Ran 3 commands",
+                    rich = "<details><summary>Ran 3 commands</summary></details>")
+    expect_identical(id, "$rich1")
+    expect_identical(seen$extra$format, "org.matrix.custom.html")
+    expect_identical(seen$extra$formatted_body,
+                     "<details><summary>Ran 3 commands</summary></details>")
+    # text is still the body. It is what a client that cannot render the
+    # markup shows, and what the push notification carries.
+    expect_identical(seen$body, "Ran 3 commands")
+})
+
+# No rich means the ordinary path, untouched.
+local({
+    took <- NULL
+    cl <- seam_client(send = function(client, text, room = NULL, ...) {
+        took <<- "plain"
+        "$p"
+    }, .rich = function(...) stop("must not be reached"))
+    expect_identical(chat_send(cl, "!a:ex", "hi"), "$p")
+    expect_identical(took, "plain")
+})
+
+# An edit carries it too, and a supplied fragment beats one rendered
+# from markdown -- the caller has markup the renderer cannot express,
+# which is the only reason to pass one.
+local({
+    seen <- NULL
+    cl <- seam_client(.edit = function(session, room_id, body, msgtype = "m.text",
+                                       extra = NULL) {
+        seen <<- extra
+        "$e"
+    })
+    chat_edit(cl, "!a:ex", "$o", "Ran 4 commands", markup = "markdown",
+              rich = "<details><summary>Ran 4 commands</summary></details>")
+    expect_identical(seen$`m.new_content`$formatted_body,
+                     "<details><summary>Ran 4 commands</summary></details>")
+    expect_identical(seen$`m.new_content`$body, "Ran 4 commands")
+})
+
+# An e2ee client drops it rather than refusing the send: the text is the
+# message and the markup is decoration, so losing it costs presentation
+# and nothing else. The capability says so beforehand.
+local({
+    ctx <- new.env(parent = emptyenv())
+    sent <- NULL
+    ops <- list(init = function(...) ctx,
+                encrypted = function(crypto, mx, room_id) TRUE,
+                send = function(crypto, mx, room_id, text, ...) {
+                    sent <<- text
+                    "$enc"
+                },
+                decrypt = function(...) list())
+    cl <- seam_client(mx = fake_mx(user_id = "@e2ee-rich:ex"),
+                      .crypto = ops, e2ee = TRUE,
+                      .rich = function(...) stop("must not be reached"))
+    expect_identical(chat_send(cl, "!secret:ex", "Ran 3 commands",
+                               rich = "<details></details>"), "$enc")
+    expect_identical(sent, "Ran 3 commands")
+    expect_identical(chat_capabilities(cl)$rich_markup, character())
+})
+expect_identical(chat_capabilities(seam_client())$rich_markup, "html")
