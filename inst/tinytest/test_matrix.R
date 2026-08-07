@@ -1599,7 +1599,7 @@ local({
                           hev("$2", "second", ts = 2000),
                           hev("$1", "first", ts = 1000)))
     })
-    h <- chat_history(cl, "!a:ex", limit = 3L)
+    h <- chat_history(cl, "!a:ex", limit = 3L)$messages
     expect_identical(seen$room_id, "!a:ex")
     expect_identical(seen$dir, "b")
     expect_identical(seen$limit, 3L)
@@ -1616,16 +1616,40 @@ local({
 })
 
 local({
-    # `before` pages backwards from a known id, and only then.
+    # The cursor is /messages' own `from` token, and it comes back out as
+    # `end`. Not a message id: handing an event id to /messages does not
+    # page from that event, so a contract that promised ids would be
+    # wrong on the reference transport.
     seen <- NULL
     cl <- seam_client(.history = function(session, room_id, ...) {
         seen <<- list(...)
-        list(chunk = list())
+        list(chunk = list(hev("$1", "one")), start = "t1", end = "t2")
     })
-    chat_history(cl, "!a:ex")
+    first <- chat_history(cl, "!a:ex")
     expect_false("from" %in% names(seen))
-    chat_history(cl, "!a:ex", before = "$9")
-    expect_identical(seen$from, "$9")
+    expect_identical(first$cursor, "t2")
+    chat_history(cl, "!a:ex", cursor = first$cursor)
+    expect_identical(seen$from, "t2")
+})
+
+# No `end` means no more history. The spec omits it at the start of a
+# room, and that -- not an empty chunk -- is the stop signal: a window
+# can be all state events and still have conversation behind it.
+local({
+    cl <- seam_client(.history = function(...) {
+        list(chunk = list(list(type = "m.room.member", event_id = "$m")))
+    })
+    res <- chat_history(cl, "!a:ex")
+    expect_identical(res$messages, list())
+    expect_null(res$cursor)
+})
+local({
+    cl <- seam_client(.history = function(...) {
+        list(chunk = list(), end = "t9")
+    })
+    # Nothing in this window, but the room has more behind it. A consumer
+    # that stopped on the empty page would lose the rest.
+    expect_identical(chat_history(cl, "!a:ex")$cursor, "t9")
 })
 
 local({
@@ -1636,7 +1660,7 @@ local({
         list(chunk = list(hev("$2", "cat.png", msgtype = "m.image"),
                           hev("$1", "look")))
     })
-    h <- chat_history(cl, "!a:ex")
+    h <- chat_history(cl, "!a:ex")$messages
     expect_identical(length(h), 1L)
     expect_identical(h[[1L]]$id, "$1")
 })
@@ -1650,7 +1674,7 @@ local({
         list(chunk = list(list(type = "m.room.member", event_id = "$m"),
                           hev("$1", "look")))
     })
-    expect_identical(length(chat_history(cl, "!a:ex")), 1L)
+    expect_identical(length(chat_history(cl, "!a:ex")$messages), 1L)
 })
 
 local({
@@ -1660,7 +1684,7 @@ local({
         list(chunk = list(hev("$1", "mine", sender = "@bot:ex",
                               mentions = "@ann:ex")))
     })
-    h <- chat_history(cl, "!a:ex")
+    h <- chat_history(cl, "!a:ex")$messages
     expect_true(h[[1L]]$self)
     expect_identical(h[[1L]]$mentions, "@ann:ex")
 })

@@ -82,25 +82,34 @@ chat_channels.chat_loopback <- function(client, ...) {
 
 #' @export
 chat_history.chat_loopback <- function(client, channel, limit = 50L,
-                                       before = NULL, ...) {
+                                       cursor = NULL, ...) {
     log <- client$env$log
     keep <- vapply(log, function(m) identical(m$channel, channel), logical(1))
     log <- log[keep]
-    if (!is.null(before)) {
-        pos <- which(vapply(log, function(m) identical(m$id, before),
-                            logical(1)))
-        if (length(pos)) {
-            if (pos[[1L]] > 1L) {
-                log <- log[seq_len(pos[[1L]] - 1L)]
-            } else {
-                log <- list()
-            }
+    # The cursor is a count of how many of this channel's messages the
+    # caller has already seen from the end. An integer, deliberately
+    # opaque: the reference adapter is what a new adapter is read as an
+    # example, and one that paged by message id would teach the wrong
+    # thing -- Matrix cannot do that at all.
+    seen <- if (is.null(cursor)) {
+        0L
+    } else {
+        as.integer(cursor)
+    }
+    if (seen > 0L) {
+        log <- if (seen >= length(log)) {
+            list()
+        } else {
+            log[seq_len(length(log) - seen)]
         }
     }
     # The tail, still oldest-first. limit trims the far end, not the near
     # one: "the last 20 messages" means the 20 most recent.
     if (length(log) > limit) {
         log <- log[seq.int(length(log) - limit + 1L, length(log))]
+        nxt <- seen + limit
+    } else {
+        nxt <- NULL
     }
-    log
+    list(messages = log, cursor = nxt)
 }

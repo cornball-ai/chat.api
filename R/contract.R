@@ -571,10 +571,23 @@ chat_channels.default <- function(client, ...) {
 #' @param client A \code{chat_client}.
 #' @param channel Channel/room identifier.
 #' @param limit Maximum messages to return.
-#' @param before Return messages older than this message id, for paging
-#'   backwards; NULL starts from the most recent.
+#' @param cursor Opaque continuation token from a previous call's
+#'   \code{cursor}, to read the page before it; NULL starts from the most
+#'   recent.
 #' @param ... Adapter-specific options.
-#' @return A list of \code{\link{chat_message}}, oldest first.
+#' @return A list with \code{messages} (list of \code{\link{chat_message}},
+#'   oldest first) and \code{cursor} (opaque; pass it back to read
+#'   further into the past, NULL when the channel has no more history).
+#'
+#' @section The cursor is opaque, like chat_poll's:
+#' Not a message id. This started out taking one and it was wrong on the
+#' reference transport: Matrix's \code{/messages} takes a pagination
+#' token from a previous response, and handing it an event id does not
+#' page from that event -- it fails, or worse, silently returns the wrong
+#' window. Slack pages by its own \code{next_cursor}. There is no id that
+#' means the same thing on both, so the contract does what it already
+#' does for \code{\link{chat_poll}}: the token is the adapter's, and a
+#' consumer only ever passes back what it was given.
 #'
 #' @section Order:
 #' Chronological, oldest first, whatever the platform's native direction
@@ -584,6 +597,10 @@ chat_channels.default <- function(client, ...) {
 #' consumer, and a consumer that gets it wrong produces a transcript
 #' that reads backwards without erroring.
 #'
+#' Note that pages run backwards while each page runs forwards: call it
+#' twice and the second page's messages all precede the first page's.
+#' A consumer assembling a full transcript prepends.
+#'
 #' @section Overlap with chat_poll:
 #' The same message can arrive from both, and adapters must return the
 #' same \code{id} for it either way. That id is the only thing a consumer
@@ -592,14 +609,14 @@ chat_channels.default <- function(client, ...) {
 #' @examples
 #' cl <- chat_loopback()
 #' chat_send(cl, "general", "hello")
-#' chat_history(cl, "general")
+#' chat_history(cl, "general")$messages
 #' @export
-chat_history <- function(client, channel, limit = 50L, before = NULL, ...) {
+chat_history <- function(client, channel, limit = 50L, cursor = NULL, ...) {
     UseMethod("chat_history")
 }
 
 #' @export
-chat_history.default <- function(client, channel, limit = 50L, before = NULL,
+chat_history.default <- function(client, channel, limit = 50L, cursor = NULL,
                                  ...) {
     stop("chat_history() is not supported by this adapter (",
          paste(class(client), collapse = "/"),

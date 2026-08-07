@@ -463,14 +463,17 @@ chat_channels.chat_slack <- function(client, ...) {
 
 #' @export
 chat_history.chat_slack <- function(client, channel, limit = 50L,
-                                    before = NULL, ...) {
+                                    cursor = NULL, ...) {
     api <- client$api_fn %||% slackr::call_slack_api
     args <- list("/api/conversations.history", .method = "GET",
                  token = client$token, channel = sub("^#", "", channel),
                  limit = as.integer(limit))
-    if (!is.null(before)) {
-        args$latest <- before
-        args$inclusive <- FALSE
+    if (!is.null(cursor)) {
+        # Slack's own cursor, not a `latest` timestamp. Both page
+        # backwards here and a message ts would even work, but the
+        # contract's token has to mean one thing across adapters, and on
+        # Matrix it cannot be a message id at all.
+        args$cursor <- cursor
     }
     body <- slack_body(do.call(api, args))
     slack_stop_for_error(body, "conversations.history")
@@ -496,7 +499,14 @@ chat_history.chat_slack <- function(client, channel, limit = 50L,
             markup = "plain", kind = "message",
             thread = m$thread_ts, raw = m)
     }
-    out
+    # Slack sends "" rather than omitting next_cursor when there is no
+    # more, and an empty-string cursor handed back to conversations.history
+    # is an error rather than a no-op.
+    nxt <- body$response_metadata$next_cursor
+    if (is.null(nxt) || !nzchar(nxt)) {
+        nxt <- NULL
+    }
+    list(messages = out, cursor = nxt)
 }
 
 #' @export

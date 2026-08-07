@@ -809,12 +809,16 @@ chat_channels.chat_matrix <- function(client, ...) {
 
 #' @export
 chat_history.chat_matrix <- function(client, channel, limit = 50L,
-                                     before = NULL, ...) {
+                                     cursor = NULL, ...) {
     fn <- client$history_fn %||% mx.api::mx_messages
     sess <- mx.client::mx_client_session(client$env$mx)
     args <- list(sess, channel, dir = "b", limit = as.integer(limit))
-    if (!is.null(before)) {
-        args$from <- before
+    if (!is.null(cursor)) {
+        # /messages `from` is a pagination token out of a previous
+        # response, not an event id. Handing it an event id does not page
+        # from that event -- which is exactly why the contract's cursor
+        # is opaque and comes from here rather than off a message.
+        args$from <- cursor
     }
     res <- do.call(fn, args)
     chunk <- res$chunk %||% list()
@@ -850,7 +854,11 @@ chat_history.chat_matrix <- function(client, channel, limit = 50L,
                               use.names = FALSE),
             raw = ev)
     }
-    out
+    # `end` continues further back. The spec omits it when there is
+    # nothing older, which is how a consumer paging to the start of a
+    # room knows to stop -- an empty chunk is not the signal, because a
+    # window can be all state events and still have history behind it.
+    list(messages = out, cursor = res$end)
 }
 
 #' @export
