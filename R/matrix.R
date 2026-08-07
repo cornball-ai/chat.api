@@ -543,10 +543,20 @@ chat_send.chat_matrix <- function(client, channel, text,
             media_ids <- c(media_ids, as.character(event))
         }
     }
+    # The contract's three kinds, plus a documented way past them: a
+    # kind already spelled as a Matrix msgtype goes out as itself. The
+    # contract has no word for an image or a file, and mapping those to
+    # "m.text" -- which is what the else branch below does to anything
+    # unrecognized -- posts a text message whose body is a filename.
+    # Better a caller that names a Matrix type explicitly than a caller
+    # forced around the contract entirely to send one.
     msgtype <- if (identical(kind, "notice")) {
         "m.notice"
     } else if (identical(kind, "emote")) {
         "m.emote"
+    } else if (is.character(kind) && length(kind) == 1L &&
+        startsWith(kind, "m.")) {
+        kind
     } else {
         "m.text"
     }
