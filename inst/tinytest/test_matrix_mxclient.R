@@ -934,3 +934,66 @@ local({
                       .send = function(...) "$1", .media = function(...) NULL)
     expect_identical(chat_whoami(cl)$id, "@bot:ex")
 })
+
+# ---- chat_set_identity picks up a rotation it did not perform ----
+# The rename wraps itself in a relogin that persists a refreshed token
+# before retrying, then returns only TRUE and discards the client it
+# refreshed. So the live token can be on disk and not in memory, and the
+# only way to have it is to read it back. This is what lets a consumer
+# hold one client across a rename instead of rebuilding one per send off
+# a file they both happen to write.
+local({
+    dir <- tempfile("ident-")
+    dir.create(dir)
+    on.exit(unlink(dir, recursive = TRUE), add = TRUE)
+    path <- file.path(dir, "matrix.json")
+
+    cfg <- chat_config(list(server = "https://ex.invalid", user = "bot",
+                            password = "pw", token = "tok",
+                            user_id = "@bot:ex", device_id = "DEV1"),
+                       path = path)
+    chat_config_save(cfg)
+
+    cl <- chat_matrix(mx = cfg, .sync = function(...) NULL,
+                      .extract = function(...) list(),
+                      .send = function(...) "$1", .media = function(...) NULL,
+                      .identity = function(client, name, ...) {
+                          # What a relogin inside the rename does: write
+                          # the new token, report only success.
+                          on_disk <- chat_matrix_config(path = path)
+                          on_disk$token <- "rotated"
+                          chat_config_save(on_disk)
+                          invisible(TRUE)
+                      })
+    expect_identical(cl$env$mx$token, "tok")
+    chat_set_identity(cl, "corteza [opus]")
+    expect_identical(cl$env$mx$token, "rotated")
+})
+
+# And unconditionally, not only when the rename reported success. A
+# relogin whose retry then failed -- rate limit, transient 5xx -- still
+# rotated the token and still wrote it. Reloading only on success is how
+# the next send goes out on the token the homeserver already rejected.
+local({
+    dir <- tempfile("ident-")
+    dir.create(dir)
+    on.exit(unlink(dir, recursive = TRUE), add = TRUE)
+    path <- file.path(dir, "matrix.json")
+    cfg <- chat_config(list(server = "https://ex.invalid", user = "bot",
+                            password = "pw", token = "tok",
+                            user_id = "@bot:ex", device_id = "DEV1"),
+                       path = path)
+    chat_config_save(cfg)
+
+    cl <- chat_matrix(mx = cfg, .sync = function(...) NULL,
+                      .extract = function(...) list(),
+                      .send = function(...) "$1", .media = function(...) NULL,
+                      .identity = function(client, name, ...) {
+                          on_disk <- chat_matrix_config(path = path)
+                          on_disk$token <- "rotated"
+                          chat_config_save(on_disk)
+                          stop("M_LIMIT_EXCEEDED")
+                      })
+    expect_error(chat_set_identity(cl, "x"), "M_LIMIT_EXCEEDED")
+    expect_identical(cl$env$mx$token, "rotated")
+})

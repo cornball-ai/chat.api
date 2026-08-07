@@ -197,32 +197,50 @@ chat_relogin.chat_matrix <- function(client, ...) {
 #' @export
 chat_set_identity.chat_matrix <- function(client, display, ...) {
     fn <- client$identity_fn %||% mx.client::mx_set_displayname
-    fn(client$env$mx, display)
-    # mx_set_displayname() wraps itself in mx_with_relogin(), which
-    # persists a refreshed config before retrying and then returns only
-    # TRUE -- discarding the client it refreshed. So the live token may
-    # now be on disk and not in memory, and the only way to pick it up
-    # is to read it back.
+    # The failure is held, not swallowed: the reload below has to run
+    # either way, and the caller still has to hear that the rename did
+    # not happen.
     #
-    # Unconditionally, not on success: a relogin whose retry then failed
-    # (rate limit, transient 5xx) still rotated the token and still
-    # wrote it. Reloading only on success is how the following send goes
-    # out on the token the homeserver has already rejected.
+    # mx_set_displayname() wraps itself in mx_with_relogin(), which
+    # persists a refreshed config *before* retrying and then returns only
+    # TRUE, discarding the client it refreshed. So a relogin whose retry
+    # then failed -- rate limit, transient 5xx -- has still rotated the
+    # token and still written it, and the live one is on disk while this
+    # client holds the rejected one. Reloading only on success is exactly
+    # how the next send goes out on a token the homeserver already
+    # refused, and it fails silently, because nothing in this stack
+    # relogins on a send.
+    err <- NULL
+    tryCatch(fn(client$env$mx, display), error = function(e) err <<- e)
+    matrix_reload_into(client)
+    if (!is.null(err)) {
+        stop(err)
+    }
+    invisible(TRUE)
+}
+
+# Re-read the config from wherever this client's was loaded and adopt it.
+# A client with no app and no path has nothing to re-read -- it was
+# handed a config directly and nobody is persisting it -- and a read that
+# fails leaves what we already had, which is no worse than not looking.
+matrix_reload_into <- function(client) {
     path <- attr(client$env$mx, "path")
     app <- attr(client$env$mx, "app") %||% client$app
-    if (!is.null(path) || !is.null(app)) {
-        args <- list()
-        if (!is.null(app)) {
-            args$app <- app
-        }
-        if (!is.null(path)) {
-            args$path <- path
-        }
-        fresh <- tryCatch(do.call(mx.client::mx_client_load, args),
-                          error = function(e) NULL)
-        if (!is.null(fresh)) {
-            client$env$mx <- fresh
-        }
+    if (is.null(path) && is.null(app)) {
+        return(invisible(FALSE))
     }
+    args <- list()
+    if (!is.null(app)) {
+        args$app <- app
+    }
+    if (!is.null(path)) {
+        args$path <- path
+    }
+    fresh <- tryCatch(do.call(mx.client::mx_client_load, args),
+                      error = function(e) NULL)
+    if (is.null(fresh)) {
+        return(invisible(FALSE))
+    }
+    client$env$mx <- fresh
     invisible(TRUE)
 }
