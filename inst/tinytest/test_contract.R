@@ -252,7 +252,13 @@ local({
     # Every page put together is the whole channel, once.
     walked <- character()
     cur <- NULL
-    repeat {
+    # Bounded, not a repeat. A cursor that fails to advance makes this
+    # loop forever, and a hung suite is a worse failure report than a
+    # wrong one: no line number, no diff, just a runner that never
+    # finishes. Ten is generous for five messages two at a time, and
+    # cur being non-NULL at the end is what says the walk did not
+    # terminate on its own.
+    for (i in seq_len(10L)) {
         pg <- chat_history(cl, "general", limit = 2L, cursor = cur)
         walked <- c(vapply(pg$messages, function(m) m$body, character(1)),
                     walked)
@@ -261,6 +267,7 @@ local({
             break
         }
     }
+    expect_null(cur)
     expect_identical(walked, c("m1", "m2", "m3", "m4", "m5"))
 })
 
