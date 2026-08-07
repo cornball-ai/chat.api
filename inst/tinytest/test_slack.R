@@ -533,3 +533,38 @@ local({
 expect_error(chat_history(slack_api_client(function(...) {
                  list(ok = FALSE, error = "channel_not_found")
              }), "lab"), "channel_not_found")
+
+# ---- Edits ----
+local({
+    seen <- NULL
+    cl <- slack_api_client(function(path, ..., .method, token) {
+        seen <<- c(list(path = path, .method = .method), list(...))
+        list(ok = TRUE)
+    })
+    expect_identical(chat_edit(cl, "#lab", "1234.5678", "done"), "1234.5678")
+    expect_identical(seen$path, "/api/chat.update")
+    expect_identical(seen$.method, "POST")
+    # body, not dots. call_slack_api() ignores `...` on its POST path,
+    # which is how reactions.add once went out carrying nothing.
+    expect_identical(seen$body$channel, "lab")
+    expect_identical(seen$body$ts, "1234.5678")
+    expect_identical(seen$body$text, "done")
+})
+
+# markdown is rendered to mrkdwn, as on the send path.
+local({
+    seen <- NULL
+    cl <- slack_api_client(function(path, ..., .method, token) {
+        seen <<- list(...)
+        list(ok = TRUE)
+    })
+    chat_edit(cl, "lab", "1.1", "**bold**", markup = "markdown")
+    expect_identical(seen$body$text, "*bold*")
+})
+
+# Slack refuses in the body with HTTP 200, so an edit it rejected would
+# otherwise report success and leave the old text on screen.
+expect_error(chat_edit(slack_api_client(function(...) {
+                 list(ok = FALSE, error = "message_not_found")
+             }), "lab", "1.1", "x"), "message_not_found")
+expect_true(chat_capabilities(slack_api_client(function(...) NULL))$edits)

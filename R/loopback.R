@@ -57,7 +57,7 @@ chat_resolve.chat_loopback <- function(client, name, ...) {
 
 #' @export
 chat_capabilities.chat_loopback <- function(client, ...) {
-    list(threads = TRUE, thread_replies = TRUE, edits = FALSE,
+    list(threads = TRUE, thread_replies = TRUE, edits = TRUE,
          reactions = FALSE, reaction_events = FALSE, channel_info = FALSE,
          members = FALSE, invites = FALSE, join = FALSE, whoami = TRUE,
          channels = TRUE, history = TRUE, pending = FALSE,
@@ -112,4 +112,24 @@ chat_history.chat_loopback <- function(client, channel, limit = 50L,
         nxt <- NULL
     }
     list(messages = log, cursor = nxt)
+}
+
+#' @export
+chat_edit.chat_loopback <- function(client, channel, message_id, text,
+                                    markup = c("plain", "markdown"), ...) {
+    markup <- match.arg(markup)
+    pos <- which(vapply(client$env$log,
+                        function(m) identical(m$id, message_id), logical(1)))
+    if (!length(pos)) {
+        # Not a no-op. A consumer editing a message that is not there has
+        # lost track of what it sent, and the reference adapter is where
+        # that should be loudest.
+        stop("chat_edit(): no message ", message_id, " in this log.",
+             call. = FALSE)
+    }
+    msg <- client$env$log[[pos[[1L]]]]
+    msg$body <- text
+    msg$markup <- markup
+    client$env$log[[pos[[1L]]]] <- msg
+    invisible(message_id)
 }

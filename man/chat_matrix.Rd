@@ -26,7 +26,8 @@ chat_matrix(
   .history = NULL,
   .pending = NULL,
   .read = NULL,
-  .identity = NULL
+  .identity = NULL,
+  .edit = NULL
 )
 }
 \arguments{
@@ -177,6 +178,9 @@ Leave NULL in production.}
 
 \item{.identity}{Testing seam: replacement for
 \code{mx.client::mx_set_displayname}. Leave NULL in production.}
+
+\item{.edit}{Testing seam: replacement for \code{mx.api::mx_send} on
+the edit path. Leave NULL in production.}
 }
 \value{
 A \code{chat_client} of class \code{chat_matrix}.

@@ -276,3 +276,40 @@ local({
 # token out of a previous response.
 expect_true("cursor" %in% names(formals(chat_history)))
 expect_false("before" %in% names(formals(chat_history)))
+
+# ---- Edits on the reference adapter ----
+local({
+    cl <- chat_loopback()
+    id <- chat_send(cl, "general", "working on it")
+    expect_identical(chat_history(cl, "general")$messages[[1L]]$body,
+                     "working on it")
+    expect_identical(chat_edit(cl, "general", id, "done"), id)
+    # Replaced in place, not appended. An edit that added a message
+    # would leave the channel reading as a stutter.
+    h <- chat_history(cl, "general")$messages
+    expect_identical(length(h), 1L)
+    expect_identical(h[[1L]]$body, "done")
+    expect_identical(h[[1L]]$id, id)
+    # markup rides along, so a plain first draft can become a formatted
+    # final one.
+    chat_edit(cl, "general", id, "**done**", markup = "markdown")
+    expect_identical(chat_history(cl, "general")$messages[[1L]]$markup,
+                     "markdown")
+})
+
+# Editing something that was never sent is an error, not a no-op. A
+# consumer doing that has lost track of what it sent, and the reference
+# adapter is where that should be loudest.
+expect_error(chat_edit(chat_loopback(), "general", "nope", "x"),
+             "no message")
+expect_true(chat_capabilities(chat_loopback())$edits)
+
+# IRC has no edits: a line is on the wire and gone. The default method
+# is what answers, and it throws.
+local({
+    cl <- structure(list(env = new.env(parent = emptyenv()), nick = "bot"),
+                    class = c("chat_irc", "chat_client"))
+    expect_false(chat_capabilities(cl)$edits)
+    expect_error(chat_edit(cl, "#lab", "1", "x"),
+                 "not supported by this adapter")
+})

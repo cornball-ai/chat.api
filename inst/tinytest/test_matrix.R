@@ -1768,3 +1768,84 @@ local({
     expect_true(caps$relogin)
     expect_identical(caps$pending, chat.api:::matrix_invites_available())
 })
+
+# ---- Edits ----
+# A progress message: post once, then keep replacing it. The alternative
+# is narrating into the channel one message per tool call, which is how
+# a room gets unreadable.
+local({
+    seen <- NULL
+    cl <- seam_client(.edit = function(session, room_id, body, msgtype = "m.text",
+                                       extra = NULL) {
+        seen <<- list(room_id = room_id, body = body, msgtype = msgtype,
+                      extra = extra)
+        "$edit1"
+    })
+    expect_identical(chat_edit(cl, "!a:ex", "$orig", "done"), "$edit1")
+    expect_identical(seen$room_id, "!a:ex")
+    # m.replace pointing at the original. Without the relation this is
+    # just a second message saying the same thing.
+    expect_identical(seen$extra$`m.relates_to`$rel_type, "m.replace")
+    expect_identical(seen$extra$`m.relates_to`$event_id, "$orig")
+    # The replacement lives in m.new_content; the top-level body is the
+    # fallback a client too old to understand edits renders instead.
+    expect_identical(seen$extra$`m.new_content`$body, "done")
+    expect_identical(seen$body, "* done")
+})
+
+# Markdown renders into both copies. A formatted edit whose new_content
+# carried only plain text would show the markup on old clients and lose
+# it on new ones, which is exactly backwards.
+local({
+    seen <- NULL
+    cl <- seam_client(.edit = function(session, room_id, body, msgtype = "m.text",
+                                       extra = NULL) {
+        seen <<- extra
+        "$e"
+    })
+    chat_edit(cl, "!a:ex", "$orig", "**bold**", markup = "markdown")
+    expect_identical(seen$`m.new_content`$format, "org.matrix.custom.html")
+    expect_true(grepl("<strong>bold</strong>",
+                      seen$`m.new_content`$formatted_body, fixed = TRUE))
+    expect_identical(seen$format, "org.matrix.custom.html")
+    expect_true(grepl("^\\* ", seen$formatted_body))
+})
+local({
+    # Plain markup sets no format at all, rather than an empty one.
+    seen <- NULL
+    cl <- seam_client(.edit = function(session, room_id, body, ...) {
+        seen <<- list(...)$extra
+        "$e"
+    })
+    chat_edit(cl, "!a:ex", "$orig", "plain")
+    expect_null(seen$format)
+    expect_null(seen$`m.new_content`$format)
+})
+
+# An encrypted room refuses. The edit carries its replacement text in an
+# ordinary event, so sending one would put it on the homeserver in the
+# clear -- in the room whose whole point is that it is not.
+local({
+    ctx <- new.env(parent = emptyenv())
+    ops <- list(init = function(...) ctx,
+                encrypted = function(crypto, mx, room_id) TRUE,
+                send = function(...) "$enc",
+                decrypt = function(...) list())
+    cl <- seam_client(mx = fake_mx(user_id = "@e2ee-edit:ex"),
+                      .crypto = ops, e2ee = TRUE,
+                      .edit = function(...) stop("must not be reached"))
+    expect_error(chat_edit(cl, "!secret:ex", "$orig", "shh"),
+                 "in the clear")
+    # And the capability says so up front, rather than letting a
+    # consumer find out by trying.
+    expect_false(chat_capabilities(cl)$edits)
+})
+expect_true(chat_capabilities(seam_client())$edits)
+
+# An adapter without edits says so instead of leaving stale text on
+# screen. A reader cannot tell that what they are looking at is no
+# longer true, which is worse than a visible failure.
+expect_error(chat_edit(structure(list(), class = c("chat_nothing",
+                                                   "chat_client")),
+                       "!a", "$1", "x"),
+             "not supported by this adapter")

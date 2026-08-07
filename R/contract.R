@@ -737,3 +737,49 @@ chat_relogin.default <- function(client, ...) {
     stop("chat_relogin() is not supported by this adapter (",
          paste(class(client), collapse = "/"), ").", call. = FALSE)
 }
+
+#' Replace the text of a message already sent
+#'
+#' What makes a progress message possible: post "working on it", then
+#' keep replacing it as the work happens, instead of narrating into the
+#' channel one message at a time.
+#'
+#' The default throws. An edit that silently does nothing leaves the old
+#' text on screen, and stale content is worse than a visible failure --
+#' the reader has no way to tell that what they are looking at is no
+#' longer true. Check \code{chat_capabilities()$edits}.
+#'
+#' @param client A \code{chat_client}.
+#' @param channel Channel/room identifier.
+#' @param message_id The message to replace, as returned by
+#'   \code{\link{chat_send}}.
+#' @param text The replacement text, in full. Not a delta: every
+#'   platform that supports this takes the whole new body, and a
+#'   contract that took a patch would have to reconstruct the old one to
+#'   apply it.
+#' @param markup \code{"plain"} or \code{"markdown"}, as
+#'   \code{\link{chat_send}}.
+#' @param ... Adapter-specific options.
+#' @return The identifier of the event the edit created where the
+#'   platform makes one (Matrix), or of the edited message where it does
+#'   not (Slack), invisibly.
+#'
+#' @section What a consumer must not assume:
+#' That the edit is what readers see. A client that does not implement
+#' edits shows the original and an "* edited" fallback beside it, and
+#' notifications almost always carry the text as first sent. So the
+#' first version has to stand on its own -- "working on it" is a fine
+#' thing to be paged with, a half-finished sentence is not.
+#' @export
+chat_edit <- function(client, channel, message_id, text,
+                      markup = c("plain", "markdown"), ...) {
+    UseMethod("chat_edit")
+}
+
+#' @export
+chat_edit.default <- function(client, channel, message_id, text,
+                              markup = c("plain", "markdown"), ...) {
+    stop("chat_edit() is not supported by this adapter (",
+         paste(class(client), collapse = "/"),
+         "). Check chat_capabilities()$edits.", call. = FALSE)
+}
