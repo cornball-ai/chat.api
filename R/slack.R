@@ -540,7 +540,7 @@ chat_set_identity.chat_slack <- function(client, display, ...) {
 #' @export
 chat_edit.chat_slack <- function(client, channel, message_id, text,
                                  markup = c("plain", "markdown"),
-                                 rich = NULL, ...) {
+                                 rich = NULL, kind = "message", ...) {
     markup <- match.arg(markup)
     api <- client$api_fn %||% slackr::call_slack_api
     resp <- api("/api/chat.update", .method = "POST", token = client$token,
