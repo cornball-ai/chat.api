@@ -775,6 +775,10 @@ chat_relogin.default <- function(client, ...) {
 #'   apply it.
 #' @param markup \code{"plain"} or \code{"markdown"}, as
 #'   \code{\link{chat_send}}.
+#' @param kind Message kind, as \code{\link{chat_send}}. Must match what
+#'   the message was sent as: Matrix carries the msgtype inside the
+#'   replacement content, so editing an \code{m.notice} without saying so
+#'   turns it into an ordinary message.
 #' @param ... Adapter-specific options.
 #' @return The identifier of the event the edit created where the
 #'   platform makes one (Matrix), or of the edited message where it does
@@ -788,14 +792,15 @@ chat_relogin.default <- function(client, ...) {
 #' thing to be paged with, a half-finished sentence is not.
 #' @export
 chat_edit <- function(client, channel, message_id, text,
-                      markup = c("plain", "markdown"), rich = NULL, ...) {
+                      markup = c("plain", "markdown"), rich = NULL,
+                      kind = "message", ...) {
     UseMethod("chat_edit")
 }
 
 #' @export
 chat_edit.default <- function(client, channel, message_id, text,
                               markup = c("plain", "markdown"), rich = NULL,
-                              ...) {
+                              kind = "message", ...) {
     stop("chat_edit() is not supported by this adapter (",
          paste(class(client), collapse = "/"),
          "). Check chat_capabilities()$edits.", call. = FALSE)

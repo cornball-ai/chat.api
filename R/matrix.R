@@ -550,23 +550,7 @@ chat_send.chat_matrix <- function(client, channel, text,
             media_ids <- c(media_ids, as.character(event))
         }
     }
-    # The contract's three kinds, plus a documented way past them: a
-    # kind already spelled as a Matrix msgtype goes out as itself. The
-    # contract has no word for an image or a file, and mapping those to
-    # "m.text" -- which is what the else branch below does to anything
-    # unrecognized -- posts a text message whose body is a filename.
-    # Better a caller that names a Matrix type explicitly than a caller
-    # forced around the contract entirely to send one.
-    msgtype <- if (identical(kind, "notice")) {
-        "m.notice"
-    } else if (identical(kind, "emote")) {
-        "m.emote"
-    } else if (is.character(kind) && length(kind) == 1L &&
-        startsWith(kind, "m.")) {
-        kind
-    } else {
-        "m.text"
-    }
+    msgtype <- matrix_msgtype(kind)
     # An attachment-only send is the uploads and nothing else. Matrix
     # accepts an empty body and clients render it as a blank bubble, so
     # posting one after every file leaves visible litter in the room.
@@ -923,7 +907,7 @@ chat_mark_read.chat_matrix <- function(client, channel, message_id, ...) {
 #' @export
 chat_edit.chat_matrix <- function(client, channel, message_id, text,
                                   markup = c("plain", "markdown"),
-                                  rich = NULL, ...) {
+                                  rich = NULL, kind = "message", ...) {
     markup <- match.arg(markup)
     # Refused in encrypted rooms, and chat_capabilities() reports
     # edits = FALSE on an e2ee client to match -- the same bargain
@@ -950,7 +934,8 @@ chat_edit.chat_matrix <- function(client, channel, message_id, text,
     } else {
         NULL
     }
-    new_content <- list(msgtype = "m.text", body = text)
+    msgtype <- matrix_msgtype(kind)
+    new_content <- list(msgtype = msgtype, body = text)
     # A supplied fragment wins over one rendered from markdown: the
     # caller has markup the renderer cannot express, which is the only
     # reason to pass one.
@@ -972,7 +957,7 @@ chat_edit.chat_matrix <- function(client, channel, message_id, text,
         extra$formatted_body <- paste0("* ", html)
     }
     invisible(as.character(fn(sess, channel, paste0("* ", text),
-                              msgtype = "m.text", extra = extra)))
+                              msgtype = msgtype, extra = extra)))
 }
 
 # A send carrying a caller-supplied HTML fragment. mx_send_text() builds
@@ -988,4 +973,28 @@ matrix_send_rich <- function(client, channel, text, rich, msgtype) {
     fn <- client$rich_fn %||% mx.api::mx_send
     fn(sess, channel, text, msgtype = msgtype,
         extra = list(format = "org.matrix.custom.html", formatted_body = rich))
+}
+
+# The contract's kind vocabulary as a Matrix msgtype, plus a documented
+# way past it: a kind already spelled as a msgtype goes out as itself.
+# The contract has no word for an image or a file, and mapping those to
+# m.text -- which is what an unrecognized kind falls to -- posts a text
+# message whose body is a filename. Better a caller that names a Matrix
+# type explicitly than one forced around the contract to send it.
+#
+# Shared by chat_send() and chat_edit(): an edit carries the msgtype in
+# its m.new_content, so an edit that assumed m.text would quietly turn
+# an m.notice into an ordinary message the first time it fired -- and
+# m.notice is what stops a bot's own output triggering other bots.
+matrix_msgtype <- function(kind) {
+    if (identical(kind, "notice")) {
+        "m.notice"
+    } else if (identical(kind, "emote")) {
+        "m.emote"
+    } else if (is.character(kind) && length(kind) == 1L &&
+        startsWith(kind, "m.")) {
+        kind
+    } else {
+        "m.text"
+    }
 }

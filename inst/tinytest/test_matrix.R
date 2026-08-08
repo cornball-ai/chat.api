@@ -1923,3 +1923,36 @@ local({
     expect_identical(chat_capabilities(cl)$rich_markup, character())
 })
 expect_identical(chat_capabilities(seam_client())$rich_markup, "html")
+
+# ---- An edit keeps the message's kind ----
+# Matrix carries the msgtype inside m.new_content, so an edit that
+# assumed m.text would turn an m.notice into an ordinary message the
+# first time it fired -- and m.notice is what keeps a bot's own output
+# from triggering other bots.
+local({
+    seen <- NULL
+    cl <- seam_client(.edit = function(session, room_id, body, msgtype = "m.text",
+                                       extra = NULL) {
+        seen <<- list(msgtype = msgtype, extra = extra)
+        "$e"
+    })
+    chat_edit(cl, "!a:ex", "$o", "Ran 3 commands", kind = "notice")
+    expect_identical(seen$msgtype, "m.notice")
+    expect_identical(seen$extra$`m.new_content`$msgtype, "m.notice")
+})
+local({
+    # Default is unchanged.
+    seen <- NULL
+    cl <- seam_client(.edit = function(session, room_id, body, msgtype = "m.text",
+                                       ...) {
+        seen <<- msgtype
+        "$e"
+    })
+    chat_edit(cl, "!a:ex", "$o", "x")
+    expect_identical(seen, "m.text")
+})
+expect_identical(chat.api:::matrix_msgtype("notice"), "m.notice")
+expect_identical(chat.api:::matrix_msgtype("emote"), "m.emote")
+expect_identical(chat.api:::matrix_msgtype("message"), "m.text")
+expect_identical(chat.api:::matrix_msgtype("m.image"), "m.image")
+expect_identical(chat.api:::matrix_msgtype(NULL), "m.text")

@@ -119,7 +119,7 @@ chat_history.chat_loopback <- function(client, channel, limit = 50L,
 #' @export
 chat_edit.chat_loopback <- function(client, channel, message_id, text,
                                     markup = c("plain", "markdown"),
-                                    rich = NULL, ...) {
+                                    rich = NULL, kind = "message", ...) {
     markup <- match.arg(markup)
     pos <- which(vapply(client$env$log,
                         function(m) identical(m$id, message_id), logical(1)))

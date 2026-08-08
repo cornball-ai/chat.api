@@ -10,6 +10,7 @@ chat_edit(
   text,
   markup = c("plain", "markdown"),
   rich = NULL,
+  kind = "message",
   ...
 )
 }
@@ -28,6 +29,11 @@ apply it.}
 
 \item{markup}{\code{"plain"} or \code{"markdown"}, as
 \code{\link{chat_send}}.}
+
+\item{kind}{Message kind, as \code{\link{chat_send}}. Must match what
+the message was sent as: Matrix carries the msgtype inside the
+replacement content, so editing an \code{m.notice} without saying so
+turns it into an ordinary message.}
 
 \item{...}{Adapter-specific options.}
 }
