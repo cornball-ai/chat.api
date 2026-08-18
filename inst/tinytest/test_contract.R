@@ -313,3 +313,99 @@ local({
     expect_error(chat_edit(cl, "#lab", "1", "x"),
                  "not supported by this adapter")
 })
+
+# ---- Channel lifecycle on the reference adapter ----
+# A created channel exists before any traffic: chat_channels() must
+# report it, or a consumer that creates and then lists sees its own
+# channel missing and creates it again.
+local({
+    cl <- chat_loopback()
+    id <- chat_channel_create(cl, "warroom")
+    expect_identical(id, "warroom")
+    expect_true("warroom" %in% chat_channels(cl))
+    chat_send(cl, id, "first")
+    expect_identical(chat_history(cl, id)$messages[[1L]]$body, "first")
+    # Creating twice is an error, not a no-op: the caller has lost
+    # track of its own state.
+    expect_error(chat_channel_create(cl, "warroom"), "already exists")
+})
+
+# Loopback has no membership, so leave refuses rather than pretending.
+local({
+    lo <- chat_loopback()
+    expect_true(chat_capabilities(lo)$channel_create)
+    expect_false(chat_capabilities(lo)$leave)
+    expect_error(chat_leave(lo, "general"), "not supported by this adapter")
+})
+
+# An adapter that cannot create says so.
+local({
+    nothing <- structure(list(), class = c("chat_nothing", "chat_client"))
+    expect_error(chat_channel_create(nothing, "x"),
+                 "not supported by this adapter")
+    expect_error(chat_leave(nothing, "x"), "not supported by this adapter")
+})
+
+# ---- Every adapter answers the lifecycle and media flags ----
+# Same rule as the reaction flags: a flag one adapter reports and
+# another omits gives a consumer NULL, and NULL is not FALSE.
+local({
+    for (adapter in c("chat_loopback", "chat_irc", "chat_slack",
+                      "chat_matrix")) {
+        m <- getS3method("chat_capabilities", adapter)
+        caps <- m(structure(list(env = new.env()), class = adapter))
+        for (flag in c("channel_create", "leave", "files", "attachments")) {
+            expect_true(flag %in% names(caps), info = paste(adapter, flag))
+            expect_true(is.logical(caps[[flag]]) && length(caps[[flag]]) == 1L,
+                        info = paste(adapter, flag))
+            expect_false(is.na(caps[[flag]]), info = paste(adapter, flag))
+        }
+    }
+})
+
+# ---- Attachment record ----
+att <- chat_attachment("mxc://ex/abc", name = "plot.png",
+                       mime = "image/png", bytes = 1024L)
+expect_inherits(att, "chat_attachment")
+expect_identical(att$id, "mxc://ex/abc")
+expect_true(is.na(chat_attachment("mxc://ex/abc")$sha256))
+expect_error(chat_attachment(""))
+expect_error(chat_attachment(NULL))
+
+# chat_message() validates attachments: a list of records or nothing.
+# A character vector of paths here is a send-side files= that leaked
+# through an adapter unconverted, which should fail at construction
+# rather than at the first consumer that indexes into it.
+local({
+    m <- chat_message(id = "1", channel = "c", sender = "ann", body = "x",
+                      ts = Sys.time(), attachments = list(att))
+    expect_identical(m$attachments[[1L]]$name, "plot.png")
+    expect_error(chat_message(id = "1", channel = "c", sender = "ann",
+                              body = "x", ts = Sys.time(),
+                              attachments = "plot.png"),
+                 "chat_attachment")
+    expect_error(chat_message(id = "1", channel = "c", sender = "ann",
+                              body = "x", ts = Sys.time(),
+                              attachments = list()),
+                 "chat_attachment")
+})
+
+# Files round-trip on the reference adapter: sent paths come back out
+# of the poll as attachment records, which is what makes loopback the
+# test double for media-carrying consumers.
+local({
+    cl <- chat_loopback()
+    f <- tempfile(fileext = ".png")
+    writeBin(as.raw(1:16), f)
+    chat_send(cl, "general", "see plot", files = f)
+    msg <- chat_poll(cl)$messages[[1L]]
+    expect_identical(length(msg$attachments), 1L)
+    expect_identical(msg$attachments[[1L]]$name, basename(f))
+    expect_identical(msg$attachments[[1L]]$bytes, 16L)
+    expect_identical(msg$attachments[[1L]]$path, f)
+    # A missing file errors rather than sending a message that quietly
+    # lost its attachment.
+    expect_error(chat_send(cl, "general", "x",
+                           files = file.path(tempdir(), "not-there.png")),
+                 "no such file")
+})

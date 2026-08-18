@@ -16,7 +16,8 @@ chat_message(
   mentions = NULL,
   raw = NULL,
   encrypted = FALSE,
-  sender_verified = NULL
+  sender_verified = NULL,
+  attachments = NULL
 )
 }
 \arguments{
@@ -71,6 +72,11 @@ verify. On an encrypted message FALSE is a real answer, not a
 missing one: the payload decrypted, but its claimed sender could not
 be tied to a verified device, so the identifier is the homeserver's
 word rather than cryptographic fact.}
+
+\item{attachments}{List of \code{\link{chat_attachment}} records,
+or NULL. Inbound media: what a sent \code{files =} looks like
+from the receiving side, on adapters whose
+\code{chat_capabilities()$attachments} is TRUE.}
 }
 \value{
 A list with class \code{chat_message}.
