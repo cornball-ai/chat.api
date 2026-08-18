@@ -318,6 +318,36 @@ chat_join.chat_slack <- function(client, channel, ...) {
 }
 
 #' @export
+chat_channel_create.chat_slack <- function(client, name, ...) {
+    # conversations.create. The name is normalized the way every other
+    # channel argument here is; Slack's own naming rules (lowercase, no
+    # spaces or periods) are enforced by the API and its refusal
+    # propagates. Adapter options (is_private = TRUE) ride through ...
+    # into the request body. The created channel is NOT added to the
+    # poll set: channels= is fixed at construction, the same bargain
+    # chat_join() makes.
+    api <- client$api_fn %||% slackr::call_slack_api
+    body <- slack_body(api("/api/conversations.create", .method = "POST",
+                           token = client$token,
+                           body = list(name = sub("^#", "", name), ...)))
+    slack_stop_for_error(body, "conversations.create")
+    invisible(as.character(body$channel$name %||% body$channel$id))
+}
+
+#' @export
+chat_leave.chat_slack <- function(client, channel, ...) {
+    # conversations.leave. A refusal (not_in_channel) propagates: a
+    # leave that quietly failed keeps delivering a channel the caller
+    # believes it has left.
+    api <- client$api_fn %||% slackr::call_slack_api
+    body <- slack_body(api("/api/conversations.leave", .method = "POST",
+                           token = client$token,
+                           body = list(channel = sub("^#", "", channel))))
+    slack_stop_for_error(body, "conversations.leave")
+    invisible(sub("^#", "", channel))
+}
+
+#' @export
 chat_members.chat_slack <- function(client, channel, ...) {
     api <- client$api_fn %||% slackr::call_slack_api
     out <- character()
@@ -387,9 +417,7 @@ chat_capabilities.chat_slack <- function(client, ...) {
          invites = FALSE, join = TRUE, whoami = TRUE,
          channels = TRUE, history = TRUE, pending = FALSE,
          mark_read = TRUE, set_identity = TRUE, relogin = FALSE,
-         # conversations.create and conversations.leave exist in the
-         # Web API; this adapter has no verbs for them yet.
-         channel_create = FALSE, leave = FALSE,
+         channel_create = TRUE, leave = TRUE,
          files = FALSE, attachments = FALSE, typing = FALSE, e2ee = FALSE,
          identity_override = TRUE, rich_markup = character(),
          markup_dialects = c("plain", "markdown"),
