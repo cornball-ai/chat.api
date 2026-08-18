@@ -115,7 +115,12 @@ chat_resolve <- function(client, name, ...) {
 #'   back out of \code{\link{chat_poll}}), \code{join}
 #'   (\code{\link{chat_join}} works), \code{whoami}
 #'   (\code{\link{chat_whoami}} works, and with it the default
-#'   \code{\link{chat_addressed}}), \code{files}, \code{typing},
+#'   \code{\link{chat_addressed}}), \code{channel_create}
+#'   (\code{\link{chat_channel_create}} works), \code{leave}
+#'   (\code{\link{chat_leave}} works), \code{files} (outbound:
+#'   \code{chat_send(files =)} works), \code{attachments} (inbound:
+#'   media comes back out of \code{\link{chat_poll}} as
+#'   \code{\link{chat_attachment}} records), \code{typing},
 #'   \code{e2ee}, \code{identity_override} (logicals),
 #'   \code{markup_dialects} (character), \code{max_message_bytes}
 #'   (integer or NA).
@@ -195,6 +200,58 @@ chat_join.default <- function(client, channel, ...) {
     stop("chat_join() is not supported by this adapter (",
          paste(class(client), collapse = "/"),
          "). Check chat_capabilities()$join.", call. = FALSE)
+}
+
+#' Create a channel
+#'
+#' Capability-gated: check \code{chat_capabilities()$channel_create}.
+#' Bots open rooms about as often as they are invited to them; a
+#' contract without creation forces every such consumer below the
+#' seam, into adapter-native calls.
+#'
+#' @param client A \code{chat_client}.
+#' @param name Character. Human-readable name for the new channel.
+#' @param ... Adapter-specific options (topic, visibility, invitees).
+#' @return The new channel's identifier, invisibly. Everything else --
+#'   sends, joins, membership -- takes the identifier, not the name,
+#'   so the return value is the point of the call.
+#' @examples
+#' cl <- chat_loopback()
+#' id <- chat_channel_create(cl, "general")
+#' chat_send(cl, id, "hello")
+#' @export
+chat_channel_create <- function(client, name, ...) {
+    UseMethod("chat_channel_create")
+}
+
+#' @export
+chat_channel_create.default <- function(client, name, ...) {
+    stop("chat_channel_create() is not supported by this adapter (",
+         paste(class(client), collapse = "/"),
+         "). Check chat_capabilities()$channel_create.", call. = FALSE)
+}
+
+#' Leave a channel
+#'
+#' The inverse of \code{\link{chat_join}}: after it returns, the
+#' client stops receiving the channel's traffic, on platforms where
+#' membership is a thing at all. Capability-gated: check
+#' \code{chat_capabilities()$leave}.
+#'
+#' @param client A \code{chat_client}.
+#' @param channel Channel/room identifier.
+#' @param ... Adapter-specific options.
+#' @return The left channel's identifier, invisibly.
+#' @export
+chat_leave <- function(client, channel, ...) {
+    UseMethod("chat_leave")
+}
+
+#' @export
+chat_leave.default <- function(client, channel, ...) {
+    stop("chat_leave() is not supported by this adapter (",
+         paste(class(client), collapse = "/"),
+         "). Check chat_capabilities()$leave.", call. = FALSE)
 }
 
 #' Construct a normalized invitation record
@@ -392,6 +449,10 @@ chat_disconnect.default <- function(client, ...) {
 #'   adapter-specific and may already be normalized by the transport
 #'   package (Matrix hands over an extracted record, not the timeline
 #'   event), so it is an escape hatch, not a guarantee of completeness.
+#' @param attachments List of \code{\link{chat_attachment}} records,
+#'   or NULL. Inbound media: what a sent \code{files =} looks like
+#'   from the receiving side, on adapters whose
+#'   \code{chat_capabilities()$attachments} is TRUE.
 #' @param encrypted Logical: did this message arrive end-to-end
 #'   encrypted? FALSE on transports without E2EE and on cleartext
 #'   messages in rooms that have it.
@@ -407,16 +468,73 @@ chat_disconnect.default <- function(client, ...) {
 chat_message <- function(id, channel, sender, body, ts, thread = NULL,
                          markup = "plain", kind = "message", self = NULL,
                          mentions = NULL, raw = NULL, encrypted = FALSE,
-                         sender_verified = NULL) {
+                         sender_verified = NULL, attachments = NULL) {
     stopifnot(is.character(id), is.character(channel), is.character(sender),
               is.character(body))
+    if (!is.null(attachments)) {
+        ok <- is.list(attachments) && length(attachments) > 0L &&
+            all(vapply(attachments, inherits, logical(1),
+                       "chat_attachment"))
+        if (!ok) {
+            stop("attachments must be a non-empty list of ",
+                 "chat_attachment records, or NULL.", call. = FALSE)
+        }
+    }
     structure(list(id = id, channel = channel, sender = sender,
                    body = body, ts = ts, thread = thread,
                    markup = markup, kind = kind, self = self,
-                   mentions = mentions, raw = raw,
+                   mentions = mentions, attachments = attachments,
+                   raw = raw,
                    encrypted = isTRUE(encrypted),
                    sender_verified = sender_verified),
               class = "chat_message")
+}
+
+#' Construct a normalized attachment record
+#'
+#' Inbound media on a \code{\link{chat_message}}: \code{chat_poll()}
+#' and \code{chat_history()} put these in the message's
+#' \code{attachments} on adapters whose
+#' \code{chat_capabilities()$attachments} is TRUE.
+#'
+#' @param id Adapter-native identifier for the content (a Matrix mxc
+#'   URI, a Slack file id). The stable handle; everything else here is
+#'   description.
+#' @param name Filename as the sender labeled it, or NA.
+#' @param mime MIME type, or NA when the transport does not say.
+#' @param bytes Size in bytes, or NA.
+#' @param url A fetchable location, or NA. It may require this
+#'   client's credentials; a consumer must not assume it is public.
+#' @param path Local filesystem path when the content is already on
+#'   disk, or NA.
+#' @param sha256 Content hash, or NA. Adapters fill it only when the
+#'   transport carries one (Matrix encrypted attachments do); they
+#'   must not compute it speculatively, because NA meaning
+#'   "unverified" is what tells a consumer that needs provenance to
+#'   hash at ingest and record the result.
+#' @param raw The adapter's platform-native payload.
+#' @return A list with class \code{chat_attachment}.
+#' @examples
+#' chat_attachment("mxc://ex/abc", name = "plot.png", mime = "image/png")
+#' @export
+chat_attachment <- function(id, name = NA_character_,
+                            mime = NA_character_, bytes = NA_integer_,
+                            url = NA_character_, path = NA_character_,
+                            sha256 = NA_character_, raw = NULL) {
+    stopifnot(is.character(id), length(id) == 1L, nzchar(id))
+    structure(list(id = id, name = name, mime = mime, bytes = bytes,
+                   url = url, path = path, sha256 = sha256, raw = raw),
+              class = "chat_attachment")
+}
+
+#' @export
+print.chat_attachment <- function(x, ...) {
+    cat(sprintf("%s%s%s\n", x$id,
+                if (is.na(x$name)) "" else sprintf(" (%s)", x$name),
+                if (is.na(x$bytes)) "" else {
+                    sprintf(", %d bytes", as.integer(x$bytes))
+                }))
+    invisible(x)
 }
 
 #' @export

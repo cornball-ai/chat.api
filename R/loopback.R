@@ -17,7 +17,26 @@
 chat_loopback <- function() {
     env <- new.env(parent = emptyenv())
     env$log <- list()
+    # Channels declared by chat_channel_create(); chat_channels()
+    # reports these plus every channel the log has seen traffic in.
+    env$channels <- character()
     structure(list(env = env), class = c("chat_loopback", "chat_client"))
+}
+
+#' @export
+chat_channel_create.chat_loopback <- function(client, name, ...) {
+    stopifnot(is.character(name), length(name) == 1L, nzchar(name))
+    # The name is the identifier, which is the simplest honest answer
+    # for an in-memory adapter -- and creating twice is an error, not a
+    # no-op, because a consumer that creates a channel it already made
+    # has lost track of its own state, and the reference adapter is
+    # where that should be loudest.
+    if (name %in% chat_channels(client)) {
+        stop("chat_channel_create(): channel '", name,
+             "' already exists.", call. = FALSE)
+    }
+    client$env$channels <- c(client$env$channels, name)
+    invisible(name)
 }
 
 #' @export
@@ -28,12 +47,32 @@ chat_send.chat_loopback <- function(client, channel, text,
                                     kind = "message", notify = TRUE,
                                     rich = NULL, ...) {
     markup <- match.arg(markup)
+    attachments <- NULL
+    if (!is.null(files)) {
+        # A missing file errors rather than sending a message that
+        # quietly lost its attachment; the reference adapter is where
+        # that should be loudest.
+        missing <- files[!file.exists(files)]
+        if (length(missing)) {
+            stop("chat_send(): no such file: ",
+                 paste(missing, collapse = ", "), call. = FALSE)
+        }
+        attachments <- lapply(seq_along(files), function(i) {
+            chat_attachment(
+                id = sprintf("loopback-file-%d-%d",
+                             length(client$env$log) + 1L, i),
+                name = basename(files[[i]]),
+                bytes = as.integer(file.size(files[[i]])),
+                path = files[[i]])
+        })
+    }
     id <- sprintf("loopback-%d", length(client$env$log) + 1L)
     msg <- chat_message(id = id, channel = channel,
                         sender = if (is.null(identity$name)) "loopback"
         else identity$name,
                         body = text, ts = Sys.time(), thread = thread,
-                        markup = markup, kind = kind)
+                        markup = markup, kind = kind,
+                        attachments = attachments)
     client$env$log[[length(client$env$log) + 1L]] <- msg
     invisible(id)
 }
@@ -63,7 +102,11 @@ chat_capabilities.chat_loopback <- function(client, ...) {
          members = FALSE, invites = FALSE, join = FALSE, whoami = TRUE,
          channels = TRUE, history = TRUE, pending = FALSE,
          mark_read = FALSE, set_identity = FALSE, relogin = FALSE,
-         files = FALSE, typing = FALSE, e2ee = FALSE,
+         channel_create = TRUE, leave = FALSE,
+         # files records the paths it was handed; attachments hands
+         # them back out of the poll. Both TRUE is what makes loopback
+         # the round-trip test double for media-carrying consumers.
+         files = TRUE, attachments = TRUE, typing = FALSE, e2ee = FALSE,
          identity_override = TRUE, rich_markup = character(),
          markup_dialects = c("plain", "markdown"),
          max_message_bytes = NA_integer_)
@@ -79,7 +122,8 @@ chat_whoami.chat_loopback <- function(client, ...) {
 
 #' @export
 chat_channels.chat_loopback <- function(client, ...) {
-    unique(vapply(client$env$log, function(m) m$channel, character(1)))
+    unique(c(client$env$channels,
+             vapply(client$env$log, function(m) m$channel, character(1))))
 }
 
 #' @export

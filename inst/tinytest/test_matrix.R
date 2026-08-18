@@ -1469,6 +1469,43 @@ expect_error(chat_join(structure(list(), class = c("chat_nothing",
                                                    "chat_client")), "!a"),
              "not supported by this adapter")
 
+# ---- Creating ----
+# The seam replaces mx.api::mx_room_create; adapter-specific options
+# (topic, visibility, invitees) ride through ... untouched.
+local({
+    seen <- NULL
+    cl <- seam_client(.create = function(session, name, ...) {
+        seen <<- list(name = name, extra = list(...))
+        "!new:ex"
+    })
+    expect_identical(chat_channel_create(cl, "warroom", topic = "t"),
+                     "!new:ex")
+    expect_identical(seen$name, "warroom")
+    expect_identical(seen$extra$topic, "t")
+})
+
+# A failed creation propagates: the caller must not walk away with a
+# name it believes is a room.
+expect_error(
+    chat_channel_create(seam_client(.create = function(...) stop("M_LIMIT")),
+                        "warroom"), "M_LIMIT")
+
+# ---- Leaving ----
+local({
+    seen <- NULL
+    cl <- seam_client(.leave = function(session, room_id) {
+        seen <<- room_id
+        NULL
+    })
+    expect_identical(chat_leave(cl, "!a:ex"), "!a:ex")
+    expect_identical(seen, "!a:ex")
+})
+
+# A failed leave propagates: doing nothing quietly keeps delivering a
+# room the caller believes it has left.
+expect_error(chat_leave(seam_client(.leave = function(...) stop("M_UNKNOWN")),
+                        "!a:ex"), "M_UNKNOWN")
+
 # ---- The record ----
 iv <- chat_invite(channel = "!a:ex", inviter = "@ann:ex")
 expect_inherits(iv, "chat_invite")

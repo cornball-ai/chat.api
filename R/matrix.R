@@ -123,6 +123,10 @@
 #'   \code{mx.api::mx_room_members}. Leave NULL in production.
 #' @param .join Testing seam: replacement for
 #'   \code{mx.api::mx_room_join}. Leave NULL in production.
+#' @param .create Testing seam: replacement for
+#'   \code{mx.api::mx_room_create}. Leave NULL in production.
+#' @param .leave Testing seam: replacement for
+#'   \code{mx.api::mx_room_leave}. Leave NULL in production.
 #' @param .channels Testing seam: replacement for
 #'   \code{mx.api::mx_rooms}. Leave NULL in production.
 #' @param .history Testing seam: replacement for
@@ -154,6 +158,7 @@ chat_matrix <- function(app = NULL, path = NULL, save_cursor = TRUE,
                         .send = NULL, .media = NULL, .typing = NULL,
                         .crypto = NULL, .save = NULL, .react = NULL,
                         .info = NULL, .members = NULL, .join = NULL,
+                        .create = NULL, .leave = NULL,
                         .channels = NULL, .history = NULL, .pending = NULL,
                         .read = NULL, .identity = NULL, .edit = NULL,
                         .rich = NULL) {
@@ -210,6 +215,7 @@ chat_matrix <- function(app = NULL, path = NULL, save_cursor = TRUE,
                    save_fn = .save,
                    typing_fn = .typing, react_fn = .react,
                    info_fn = .info, members_fn = .members, join_fn = .join,
+                   create_fn = .create, leave_fn = .leave,
                    channels_fn = .channels, history_fn = .history,
                    pending_fn = .pending, read_fn = .read,
                    identity_fn = .identity, edit_fn = .edit,
@@ -655,6 +661,26 @@ chat_join.chat_matrix <- function(client, channel, ...) {
 }
 
 #' @export
+chat_channel_create.chat_matrix <- function(client, name, ...) {
+    # Errors propagate, chat_join()'s reasoning: a creation that
+    # quietly failed leaves the caller sending into a room that does
+    # not exist.
+    sess <- mx.client::mx_client_session(client$env$mx)
+    create_fn <- client$create_fn %||% mx.api::mx_room_create
+    invisible(as.character(create_fn(sess, name = name, ...)))
+}
+
+#' @export
+chat_leave.chat_matrix <- function(client, channel, ...) {
+    # Errors propagate: a leave that quietly failed keeps delivering a
+    # room the caller believes it has left.
+    sess <- mx.client::mx_client_session(client$env$mx)
+    leave_fn <- client$leave_fn %||% mx.api::mx_room_leave
+    leave_fn(sess, channel)
+    invisible(channel)
+}
+
+#' @export
 chat_members.chat_matrix <- function(client, channel, ...) {
     # Errors propagate. An empty room and an unanswerable question are
     # different things, and character() has to mean only the first.
@@ -719,7 +745,17 @@ chat_capabilities.chat_matrix <- function(client, ...) {
          invites = matrix_invites_available(), join = TRUE, whoami = TRUE,
          channels = TRUE, history = TRUE,
          pending = matrix_invites_available(), mark_read = TRUE,
-         set_identity = TRUE, relogin = TRUE, files = !isTRUE(client$e2ee),
+         set_identity = TRUE, relogin = TRUE,
+         channel_create = TRUE, leave = TRUE,
+         files = !isTRUE(client$e2ee),
+         # attachments is FALSE for the same structural reason
+         # thread_replies is: the only event source is
+         # mx.client::mx_extract_text_events(), which filters to text
+         # msgtypes, so m.image/m.file/m.audio/m.video never reach this
+         # adapter. Flip it when mx.client grows a media-aware
+         # extractor and chat_poll maps those events onto
+         # chat_attachment records.
+         attachments = FALSE,
          typing = TRUE, e2ee = isTRUE(client$e2ee),
          identity_override = FALSE,
          # Empty on an e2ee client: the Megolm path builds its own HTML

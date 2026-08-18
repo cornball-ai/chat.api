@@ -129,7 +129,10 @@ chat_capabilities.chat_irc <- function(client, ...) {
          members = FALSE, invites = FALSE, join = FALSE, whoami = TRUE,
          channels = FALSE, history = FALSE, pending = FALSE,
          mark_read = FALSE, set_identity = TRUE, relogin = FALSE,
-         files = FALSE, typing = FALSE, e2ee = FALSE,
+         # IRC JOIN would create a channel implicitly, but this adapter
+         # has no join verb yet, so neither flag can be TRUE honestly.
+         channel_create = FALSE, leave = FALSE,
+         files = FALSE, attachments = FALSE, typing = FALSE, e2ee = FALSE,
          identity_override = FALSE, rich_markup = character(),
          markup_dialects = "plain", max_message_bytes = 400L)
 }

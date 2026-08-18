@@ -22,6 +22,8 @@ chat_matrix(
   .info = NULL,
   .members = NULL,
   .join = NULL,
+  .create = NULL,
+  .leave = NULL,
   .channels = NULL,
   .history = NULL,
   .pending = NULL,
@@ -163,6 +165,12 @@ replacing \code{mx.api::mx_room_name} and
 
 \item{.join}{Testing seam: replacement for
 \code{mx.api::mx_room_join}. Leave NULL in production.}
+
+\item{.create}{Testing seam: replacement for
+\code{mx.api::mx_room_create}. Leave NULL in production.}
+
+\item{.leave}{Testing seam: replacement for
+\code{mx.api::mx_room_leave}. Leave NULL in production.}
 
 \item{.channels}{Testing seam: replacement for
 \code{mx.api::mx_rooms}. Leave NULL in production.}

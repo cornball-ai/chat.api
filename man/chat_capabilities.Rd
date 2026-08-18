@@ -21,7 +21,12 @@ A list with at least: \code{threads} (can post into
   back out of \code{\link{chat_poll}}), \code{join}
   (\code{\link{chat_join}} works), \code{whoami}
   (\code{\link{chat_whoami}} works, and with it the default
-  \code{\link{chat_addressed}}), \code{files}, \code{typing},
+  \code{\link{chat_addressed}}), \code{channel_create}
+  (\code{\link{chat_channel_create}} works), \code{leave}
+  (\code{\link{chat_leave}} works), \code{files} (outbound:
+  \code{chat_send(files =)} works), \code{attachments} (inbound:
+  media comes back out of \code{\link{chat_poll}} as
+  \code{\link{chat_attachment}} records), \code{typing},
   \code{e2ee}, \code{identity_override} (logicals),
   \code{markup_dialects} (character), \code{max_message_bytes}
   (integer or NA).

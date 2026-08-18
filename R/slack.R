@@ -387,7 +387,10 @@ chat_capabilities.chat_slack <- function(client, ...) {
          invites = FALSE, join = TRUE, whoami = TRUE,
          channels = TRUE, history = TRUE, pending = FALSE,
          mark_read = TRUE, set_identity = TRUE, relogin = FALSE,
-         files = FALSE, typing = FALSE, e2ee = FALSE,
+         # conversations.create and conversations.leave exist in the
+         # Web API; this adapter has no verbs for them yet.
+         channel_create = FALSE, leave = FALSE,
+         files = FALSE, attachments = FALSE, typing = FALSE, e2ee = FALSE,
          identity_override = TRUE, rich_markup = character(),
          markup_dialects = c("plain", "markdown"),
          max_message_bytes = 40000L)
