@@ -474,8 +474,7 @@ chat_message <- function(id, channel, sender, body, ts, thread = NULL,
               is.character(body))
     if (!is.null(attachments)) {
         ok <- is.list(attachments) && length(attachments) > 0L &&
-            all(vapply(attachments, inherits, logical(1),
-                       "chat_attachment"))
+        all(vapply(attachments, inherits, logical(1), "chat_attachment"))
         if (!ok) {
             stop("attachments must be a non-empty list of ",
                  "chat_attachment records, or NULL.", call. = FALSE)
@@ -518,10 +517,10 @@ chat_message <- function(id, channel, sender, body, ts, thread = NULL,
 #' @examples
 #' chat_attachment("mxc://ex/abc", name = "plot.png", mime = "image/png")
 #' @export
-chat_attachment <- function(id, name = NA_character_,
-                            mime = NA_character_, bytes = NA_integer_,
-                            url = NA_character_, path = NA_character_,
-                            sha256 = NA_character_, raw = NULL) {
+chat_attachment <- function(id, name = NA_character_, mime = NA_character_,
+                            bytes = NA_integer_, url = NA_character_,
+                            path = NA_character_, sha256 = NA_character_,
+                            raw = NULL) {
     stopifnot(is.character(id), length(id) == 1L, nzchar(id))
     structure(list(id = id, name = name, mime = mime, bytes = bytes,
                    url = url, path = path, sha256 = sha256, raw = raw),
@@ -531,10 +530,10 @@ chat_attachment <- function(id, name = NA_character_,
 #' @export
 print.chat_attachment <- function(x, ...) {
     cat(sprintf("%s%s%s\n", x$id,
-                if (is.na(x$name)) "" else sprintf(" (%s)", x$name),
-                if (is.na(x$bytes)) "" else {
-                    sprintf(", %d bytes", as.integer(x$bytes))
-                }))
+            if (is.na(x$name)) "" else sprintf(" (%s)", x$name),
+            if (is.na(x$bytes)) "" else {
+                sprintf(", %d bytes", as.integer(x$bytes))
+            }))
     invisible(x)
 }
 
@@ -874,8 +873,8 @@ chat_set_identity.default <- function(client, display, ...) {
 #' @return The state event's identifier where the platform gives one
 #'   (Matrix), invisibly; \code{TRUE} where it does not.
 #' @export
-chat_set_state <- function(client, channel, type, content,
-                           state_key = "", ...) {
+chat_set_state <- function(client, channel, type, content, state_key = "",
+                           ...) {
     UseMethod("chat_set_state")
 }
 
