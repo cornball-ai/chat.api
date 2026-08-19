@@ -1506,6 +1506,36 @@ local({
 expect_error(chat_leave(seam_client(.leave = function(...) stop("M_UNKNOWN")),
                         "!a:ex"), "M_UNKNOWN")
 
+# ---- Channel state ----
+# The seam replaces mx.api::mx_set_state. The default state_key is the
+# empty string, where most Matrix state lives, and it is passed by name
+# so a seam with the real signature receives it in the right slot.
+local({
+    seen <- NULL
+    cl <- seam_client(.state = function(session, channel, type, content,
+                                        state_key = "") {
+        seen <<- list(channel = channel, type = type, content = content,
+                      state_key = state_key)
+        "$st1"
+    })
+    expect_identical(chat_set_state(cl, "!a:ex", "ai.example.marker",
+                                    list(state = "parked")), "$st1")
+    expect_identical(seen$channel, "!a:ex")
+    expect_identical(seen$type, "ai.example.marker")
+    expect_identical(seen$content, list(state = "parked"))
+    expect_identical(seen$state_key, "")
+    chat_set_state(cl, "!a:ex", "ai.example.marker", list(),
+                   state_key = "alt")
+    expect_identical(seen$state_key, "alt")
+})
+
+# A failed write propagates: doing nothing quietly leaves a marker the
+# caller believes is set and no reader will ever see.
+expect_error(
+    chat_set_state(seam_client(.state = function(...) stop("M_FORBIDDEN")),
+                   "!a:ex", "ai.example.marker", list()),
+    "M_FORBIDDEN")
+
 # ---- The record ----
 iv <- chat_invite(channel = "!a:ex", inviter = "@ann:ex")
 expect_inherits(iv, "chat_invite")

@@ -20,6 +20,10 @@ chat_loopback <- function() {
     # Channels declared by chat_channel_create(); chat_channels()
     # reports these plus every channel the log has seen traffic in.
     env$channels <- character()
+    # Durable channel state written by chat_set_state(), keyed by
+    # channel/type/state_key. A write replaces the previous content for
+    # its key, which is the Matrix semantic consumers test against.
+    env$state <- list()
     structure(list(env = env), class = c("chat_loopback", "chat_client"))
 }
 
@@ -32,11 +36,23 @@ chat_channel_create.chat_loopback <- function(client, name, ...) {
     # has lost track of its own state, and the reference adapter is
     # where that should be loudest.
     if (name %in% chat_channels(client)) {
-        stop("chat_channel_create(): channel '", name,
-             "' already exists.", call. = FALSE)
+        stop("chat_channel_create(): channel '", name, "' already exists.",
+             call. = FALSE)
     }
     client$env$channels <- c(client$env$channels, name)
     invisible(name)
+}
+
+#' @export
+chat_set_state.chat_loopback <- function(client, channel, type, content,
+    state_key = "", ...) {
+    stopifnot(is.character(channel), length(channel) == 1L, nzchar(channel),
+              is.character(type), length(type) == 1L, nzchar(type),
+              is.list(content), is.character(state_key),
+              length(state_key) == 1L)
+    key <- paste(channel, type, state_key, sep = "\r")
+    client$env$state[[key]] <- content
+    invisible(sprintf("loopback-state-%d", length(client$env$state)))
 }
 
 #' @export
@@ -59,11 +75,11 @@ chat_send.chat_loopback <- function(client, channel, text,
         }
         attachments <- lapply(seq_along(files), function(i) {
             chat_attachment(
-                id = sprintf("loopback-file-%d-%d",
-                             length(client$env$log) + 1L, i),
-                name = basename(files[[i]]),
-                bytes = as.integer(file.size(files[[i]])),
-                path = files[[i]])
+                            id = sprintf("loopback-file-%d-%d",
+                    length(client$env$log) + 1L, i),
+                            name = basename(files[[i]]),
+                            bytes = as.integer(file.size(files[[i]])),
+                            path = files[[i]])
         })
     }
     id <- sprintf("loopback-%d", length(client$env$log) + 1L)
@@ -102,7 +118,7 @@ chat_capabilities.chat_loopback <- function(client, ...) {
          members = FALSE, invites = FALSE, join = FALSE, whoami = TRUE,
          channels = TRUE, history = TRUE, pending = FALSE,
          mark_read = FALSE, set_identity = FALSE, relogin = FALSE,
-         channel_create = TRUE, leave = FALSE,
+         channel_create = TRUE, leave = FALSE, set_state = TRUE,
          # files records the paths it was handed; attachments hands
          # them back out of the poll. Both TRUE is what makes loopback
          # the round-trip test double for media-carrying consumers.

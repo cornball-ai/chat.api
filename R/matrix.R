@@ -158,7 +158,7 @@ chat_matrix <- function(app = NULL, path = NULL, save_cursor = TRUE,
                         .send = NULL, .media = NULL, .typing = NULL,
                         .crypto = NULL, .save = NULL, .react = NULL,
                         .info = NULL, .members = NULL, .join = NULL,
-                        .create = NULL, .leave = NULL,
+                        .create = NULL, .leave = NULL, .state = NULL,
                         .channels = NULL, .history = NULL, .pending = NULL,
                         .read = NULL, .identity = NULL, .edit = NULL,
                         .rich = NULL) {
@@ -216,6 +216,7 @@ chat_matrix <- function(app = NULL, path = NULL, save_cursor = TRUE,
                    typing_fn = .typing, react_fn = .react,
                    info_fn = .info, members_fn = .members, join_fn = .join,
                    create_fn = .create, leave_fn = .leave,
+                   state_fn = .state,
                    channels_fn = .channels, history_fn = .history,
                    pending_fn = .pending, read_fn = .read,
                    identity_fn = .identity, edit_fn = .edit,
@@ -681,6 +682,18 @@ chat_leave.chat_matrix <- function(client, channel, ...) {
 }
 
 #' @export
+chat_set_state.chat_matrix <- function(client, channel, type, content,
+                                       state_key = "", ...) {
+    # Errors propagate, chat_react()'s reasoning: a state write that
+    # quietly failed leaves a marker the caller believes is set and no
+    # reader will ever see.
+    sess <- mx.client::mx_client_session(client$env$mx)
+    state_fn <- client$state_fn %||% mx.api::mx_set_state
+    invisible(as.character(state_fn(sess, channel, type, content,
+                                    state_key = state_key)))
+}
+
+#' @export
 chat_members.chat_matrix <- function(client, channel, ...) {
     # Errors propagate. An empty room and an unanswerable question are
     # different things, and character() has to mean only the first.
@@ -746,7 +759,7 @@ chat_capabilities.chat_matrix <- function(client, ...) {
          channels = TRUE, history = TRUE,
          pending = matrix_invites_available(), mark_read = TRUE,
          set_identity = TRUE, relogin = TRUE,
-         channel_create = TRUE, leave = TRUE,
+         channel_create = TRUE, leave = TRUE, set_state = TRUE,
          files = !isTRUE(client$e2ee),
          # attachments is FALSE for the same structural reason
          # thread_replies is: the only event source is
