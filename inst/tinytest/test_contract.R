@@ -338,6 +338,34 @@ local({
     expect_error(chat_leave(lo, "general"), "not supported by this adapter")
 })
 
+# ---- Channel state on the reference adapter ----
+# A write is durable and keyed by channel/type/state_key; a second
+# write to the same key replaces the content whole, never merges.
+local({
+    lo <- chat_loopback()
+    expect_true(chat_capabilities(lo)$set_state)
+    id <- chat_set_state(lo, "general", "ai.example.marker",
+                         list(state = "parked", since = "2026-08-19"))
+    expect_true(is.character(id) && nzchar(id))
+    key <- paste("general", "ai.example.marker", "", sep = "\r")
+    expect_identical(lo$env$state[[key]],
+                     list(state = "parked", since = "2026-08-19"))
+    chat_set_state(lo, "general", "ai.example.marker",
+                   list(state = "active"))
+    expect_identical(lo$env$state[[key]], list(state = "active"))
+    # Distinct state_keys are distinct slots under one type.
+    chat_set_state(lo, "general", "ai.example.marker",
+                   list(state = "parked"), state_key = "alt")
+    expect_identical(lo$env$state[[key]], list(state = "active"))
+})
+
+# An adapter that cannot write state says so.
+local({
+    nothing <- structure(list(), class = c("chat_nothing", "chat_client"))
+    expect_error(chat_set_state(nothing, "c", "t", list()),
+                 "not supported by this adapter")
+})
+
 # An adapter that cannot create says so.
 local({
     nothing <- structure(list(), class = c("chat_nothing", "chat_client"))

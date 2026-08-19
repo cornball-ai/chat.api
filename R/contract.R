@@ -117,7 +117,8 @@ chat_resolve <- function(client, name, ...) {
 #'   (\code{\link{chat_whoami}} works, and with it the default
 #'   \code{\link{chat_addressed}}), \code{channel_create}
 #'   (\code{\link{chat_channel_create}} works), \code{leave}
-#'   (\code{\link{chat_leave}} works), \code{files} (outbound:
+#'   (\code{\link{chat_leave}} works), \code{set_state}
+#'   (\code{\link{chat_set_state}} works), \code{files} (outbound:
 #'   \code{chat_send(files =)} works), \code{attachments} (inbound:
 #'   media comes back out of \code{\link{chat_poll}} as
 #'   \code{\link{chat_attachment}} records), \code{typing},
@@ -846,6 +847,44 @@ chat_set_identity.default <- function(client, display, ...) {
     stop("chat_set_identity() is not supported by this adapter (",
          paste(class(client), collapse = "/"),
          "). Check chat_capabilities()$set_identity.", call. = FALSE)
+}
+
+#' Set durable typed state on a channel
+#'
+#' Attaches a typed, durable piece of metadata to a channel, readable
+#' by every client in it and replaced by the next write to the same
+#' \code{type} and \code{state_key}. On Matrix this is a state event;
+#' most platforms have no equivalent, which is why it is
+#' capability-gated: check \code{chat_capabilities()$set_state}.
+#'
+#' The default method throws, on \code{\link{chat_react}}'s reasoning:
+#' a state write that silently did nothing leaves the caller believing
+#' a marker is set that no reader will ever see.
+#'
+#' @param client A \code{chat_client}.
+#' @param channel Channel/room identifier.
+#' @param type Character. Namespaced event type, e.g.
+#'   \code{"m.room.topic"} or a reversed-domain custom type.
+#' @param content Named list. The state content. A write replaces the
+#'   whole content for its \code{type}/\code{state_key} pair; there is
+#'   no merge.
+#' @param state_key Character. Sub-key within the type. Most state is
+#'   keyed by the empty string, the default.
+#' @param ... Adapter-specific options.
+#' @return The state event's identifier where the platform gives one
+#'   (Matrix), invisibly; \code{TRUE} where it does not.
+#' @export
+chat_set_state <- function(client, channel, type, content,
+                           state_key = "", ...) {
+    UseMethod("chat_set_state")
+}
+
+#' @export
+chat_set_state.default <- function(client, channel, type, content,
+                                   state_key = "", ...) {
+    stop("chat_set_state() is not supported by this adapter (",
+         paste(class(client), collapse = "/"),
+         "). Check chat_capabilities()$set_state.", call. = FALSE)
 }
 
 #' Refresh this client's credentials

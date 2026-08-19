@@ -389,7 +389,7 @@ chat_capabilities.chat_slack <- function(client, ...) {
          mark_read = TRUE, set_identity = TRUE, relogin = FALSE,
          # conversations.create and conversations.leave exist in the
          # Web API; this adapter has no verbs for them yet.
-         channel_create = FALSE, leave = FALSE,
+         channel_create = FALSE, leave = FALSE, set_state = FALSE,
          files = FALSE, attachments = FALSE, typing = FALSE, e2ee = FALSE,
          identity_override = TRUE, rich_markup = character(),
          markup_dialects = c("plain", "markdown"),
