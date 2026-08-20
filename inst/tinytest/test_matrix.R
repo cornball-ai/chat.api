@@ -1526,6 +1526,133 @@ local({
 expect_error(chat_leave(seam_client(.leave = function(...) stop("M_UNKNOWN")),
                         "!a:ex"), "M_UNKNOWN")
 
+# ---- Inbound media ----
+# A picture is its own m.room.message event on Matrix, so it comes back
+# as its own chat_message carrying one attachment -- the shape
+# chat_send() produces outbound, where each file is a separate event.
+media_rec <- function(event_id, url = "mxc://ex/abc", msgtype = "m.image",
+                      body = "IMG_0942.png", encrypted = FALSE,
+                      mime = "image/png", size = 4096L, ...) {
+    list(room_id = "!room:ex", event_id = event_id, sender = "@alice:ex",
+         is_self = FALSE, body = body, filename = NULL, msgtype = msgtype,
+         ts = 1700000000000, url = url, mime = mime, size = size,
+         sha256 = NULL, encrypted = encrypted, file = NULL,
+         mentions = NULL, relates_to = NULL, ...)
+}
+
+local({
+    # self_id is read, not ignored. The extractor tags the bot's own
+    # uploads with it, and a seam that never touches the argument leaves
+    # it an unforced promise -- which is how the first version of this
+    # shipped with an undefined variable there and every test agreed.
+    seen_self <- NULL
+    cl <- seam_client(recs = list(rec("$t1", body = "look at this")),
+                      .extract_media = function(sync, self_id) {
+                          seen_self <<- self_id
+                          list(media_rec("$img1"))
+                      })
+    msgs <- chat_poll(cl)$messages
+    expect_identical(seen_self, "@bot:ex")
+    expect_identical(length(msgs), 2L)
+    img <- Filter(function(m) length(m$attachments), msgs)[[1L]]
+    expect_identical(img$id, "$img1")
+    expect_identical(img$channel, "!room:ex")
+    # The filename Matrix ships as the event's text fallback is kept:
+    # it is what a client that cannot render the picture shows, and
+    # what a consumer writing a transcript has to write.
+    expect_identical(img$body, "IMG_0942.png")
+    expect_identical(img$kind, "message")
+    att <- img$attachments[[1L]]
+    expect_inherits(att, "chat_attachment")
+    expect_identical(att$url, "mxc://ex/abc")
+    expect_identical(att$mime, "image/png")
+    expect_identical(att$bytes, 4096L)
+    expect_identical(att$name, "IMG_0942.png")
+    # A text message in the same sync is untouched and carries none.
+    txt <- Filter(function(m) !length(m$attachments), msgs)[[1L]]
+    expect_identical(txt$body, "look at this")
+    expect_null(txt$attachments)
+})
+
+# Media rides the same ordering as everything else: a picture sent
+# before a comment must not arrive after it.
+local({
+    sync <- wrap_sync(list(ev("$img1"), ev("$t1")))
+    cl <- seam_client(recs = list(rec("$t1", body = "second")),
+                      sync = sync,
+                      .extract_media = function(sync, self_id) {
+                          list(media_rec("$img1", body = "first.png"))
+                      })
+    ids <- vapply(chat_poll(cl)$messages, function(m) m$id, character(1))
+    expect_identical(ids, c("$img1", "$t1"))
+})
+
+# A media extractor that throws costs the poll its media, not its text:
+# the room's actual conversation still arrives.
+local({
+    cl <- seam_client(recs = list(rec("$t1")),
+                      .extract_media = function(...) stop("malformed"))
+    expect_message(res <- chat_poll(cl), "media extraction failed")
+    expect_identical(length(res$messages), 1L)
+    expect_identical(res$messages[[1L]]$id, "$t1")
+})
+
+# ---- Fetching media ----
+local({
+    seen <- NULL
+    cl <- seam_client(.download = function(session, mxc_url, dest) {
+        seen <<- list(url = mxc_url, dest = dest)
+        writeBin(as.raw(1:8), dest)
+        dest
+    })
+    att <- chat_attachment(id = "mxc://ex/abc", name = "shot.png",
+                           url = "mxc://ex/abc",
+                           raw = list(encrypted = FALSE))
+    dest <- chat_download(cl, att)
+    expect_identical(seen$url, "mxc://ex/abc")
+    # The extension survives, so a consumer handing the file to
+    # something that sniffs by extension does not have to rename it.
+    expect_true(grepl("[.]png$", dest))
+    expect_true(file.exists(dest))
+})
+
+# An encrypted attachment is refused rather than fetched: the bytes
+# behind the URL are ciphertext and this adapter cannot decrypt media,
+# so downloading would write a file that is not the picture.
+local({
+    cl <- seam_client(.download = function(...) stop("must not fetch"))
+    enc_att <- chat_attachment(id = "mxc://ex/enc", name = "secret.png",
+                               url = "mxc://ex/enc",
+                               raw = list(encrypted = TRUE))
+    expect_error(chat_download(cl, enc_att), "cannot decrypt media")
+})
+
+# An attachment naming nothing to fetch fails before the network.
+expect_error(
+    chat_download(seam_client(.download = function(...) stop("must not fetch")),
+                  chat_attachment(id = "x")), "names no content")
+
+# The capability tracks the installed mx.client, and covers both
+# halves: media arriving, and its bytes being fetchable. A supplied
+# seam is a media source too, so it must not disagree with the poll
+# running right next to it in this file.
+local({
+    expect_identical(chat_capabilities(seam_client())$attachments,
+                     chat.api:::matrix_media_available())
+    expect_true(chat_capabilities(
+        seam_client(.extract_media = function(...) list()))$attachments)
+})
+
+# On an e2ee client media is still reported: the events arrive either
+# way, and what an encrypted attachment cannot do is be fetched.
+local({
+    cl <- seam_client(.extract_media = function(...) list(),
+                      e2ee = TRUE, .crypto = fake_crypto()$ops)
+    caps <- chat_capabilities(cl)
+    expect_true(caps$attachments)
+    expect_false(caps$files)
+})
+
 # ---- Threads ----
 # Inbound: only rel_type m.thread becomes $thread. A rich reply carries
 # an m.in_reply_to and no rel_type, and reading that as a thread would

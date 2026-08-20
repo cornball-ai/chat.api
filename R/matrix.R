@@ -127,6 +127,17 @@
 #'   \code{mx.api::mx_room_create}. Leave NULL in production.
 #' @param .leave Testing seam: replacement for
 #'   \code{mx.api::mx_room_leave}. Leave NULL in production.
+#' @param .state Testing seam: replacement for
+#'   \code{mx.api::mx_set_state}. Leave NULL in production.
+#' @param .get_state Testing seam: replacement for
+#'   \code{mx.api::mx_get_state}. Leave NULL in production.
+#' @param .extract_media Testing seam: replacement for
+#'   \code{mx.client::mx_extract_media_events}. Leave NULL in
+#'   production. Supplying it also flips
+#'   \code{chat_capabilities()$attachments} on, since a seam is a media
+#'   source like any other.
+#' @param .download Testing seam: replacement for
+#'   \code{mx.api::mx_download}. Leave NULL in production.
 #' @param .channels Testing seam: replacement for
 #'   \code{mx.api::mx_rooms}. Leave NULL in production.
 #' @param .history Testing seam: replacement for
@@ -159,7 +170,8 @@ chat_matrix <- function(app = NULL, path = NULL, save_cursor = TRUE,
                         .crypto = NULL, .save = NULL, .react = NULL,
                         .info = NULL, .members = NULL, .join = NULL,
                         .create = NULL, .leave = NULL, .state = NULL,
-                        .get_state = NULL, .channels = NULL, .history = NULL,
+                        .get_state = NULL, .extract_media = NULL,
+                        .download = NULL, .channels = NULL, .history = NULL,
                         .pending = NULL, .read = NULL, .identity = NULL,
                         .edit = NULL, .rich = NULL) {
     seams <- list(.sync, .extract, .send, .media)
@@ -217,6 +229,8 @@ chat_matrix <- function(app = NULL, path = NULL, save_cursor = TRUE,
                    info_fn = .info, members_fn = .members, join_fn = .join,
                    create_fn = .create, leave_fn = .leave,
                    state_fn = .state, get_state_fn = .get_state,
+                   extract_media_fn = .extract_media,
+                   download_fn = .download,
                    channels_fn = .channels, history_fn = .history,
                    pending_fn = .pending, read_fn = .read,
                    identity_fn = .identity, edit_fn = .edit,
@@ -308,6 +322,50 @@ matrix_reactions_available <- function() {
 matrix_threads_available <- function() {
     requireNamespace("mx.client", quietly = TRUE) &&
     "thread" %in% names(formals(mx.client::mx_send_text))
+}
+
+# The sync's media events, as extractor records. Empty on an mx.client
+# with no media extractor, and empty rather than an error when the
+# extractor throws: a malformed media event must not cost the poll its
+# text messages, which are the traffic the room is actually having.
+matrix_media_records <- function(client, sync, self_id) {
+    # Forced here, outside the tryCatch, so a caller that cannot supply
+    # one is an error rather than a room with no pictures in it. R hands
+    # the argument to the seam as a promise, and a seam double that
+    # ignores it never forces it: the first version of this passed an
+    # undefined `self_id` and every seamed test agreed there was no
+    # problem.
+    force(self_id)
+    fn <- client$extract_media_fn
+    if (is.null(fn)) {
+        if (!matrix_media_available()) {
+            return(list())
+        }
+        fn <- mx.client::mx_extract_media_events
+    }
+    tryCatch(fn(sync, self_id), error = function(e) {
+        message("chat.api: media extraction failed: ", conditionMessage(e))
+        list()
+    })
+}
+
+# Whether the installed mx.client can report inbound media. Probed for
+# the same reason threads are: mx_extract_media_events() arrived in
+# 0.2.0.6, and on an older build the poll has no source for media at
+# all. A consumer reads the capability rather than discovering that
+# every image in a room is invisible.
+matrix_media_available <- function() {
+    requireNamespace("mx.client", quietly = TRUE) &&
+    "mx_extract_media_events" %in% getNamespaceExports("mx.client")
+}
+
+# What chat_capabilities() reports. A supplied seam is a media source
+# too, so a client built with one reports media on a runner where
+# mx.client is not installed at all -- the configuration the seamed
+# tests run in, and the one that would otherwise have the capability
+# disagreeing with the poll sitting right next to it.
+matrix_media_capable <- function(client) {
+    !is.null(client$extract_media_fn) || matrix_media_available()
 }
 
 # The sync's pending invites, as contract records.
@@ -516,6 +574,45 @@ chat_poll.chat_matrix <- function(client, since = NULL, timeout = NULL, ...) {
             encrypted = TRUE,
             sender_verified = isTRUE(d$sender_verified),
             raw = d)
+    }
+    # Inbound media. A picture is its own m.room.message event on
+    # Matrix, so it becomes its own chat_message carrying one
+    # attachment -- the same shape chat_send() produces outbound, where
+    # each file is sent as a separate event.
+    #
+    # The text extractor filters to text msgtypes, so without this pass
+    # an image is not merely unreadable, it is invisible: nothing in the
+    # room's traffic says a picture was ever sent.
+    for (a in matrix_media_records(client, res$sync, res$client$user_id)) {
+        ms <- a$ts %||% event_ts[[as.character(a$event_id)]]
+        name <- a$filename %||% a$body
+        messages[[length(messages) + 1L]] <- chat_message(
+            id = as.character(a$event_id),
+            channel = as.character(a$room_id),
+            sender = as.character(a$sender),
+            # The body is the filename Matrix ships as the event's
+            # text fallback. Kept, because it is what a client that
+            # cannot render the picture shows, and what a consumer
+            # writing a transcript has to write.
+            body = as.character(a$body %||% ""),
+            ts = if (is.null(ms)) as.POSIXct(NA) else
+            as.POSIXct(ms / 1000, origin = "1970-01-01"),
+            thread = matrix_thread_root(a$relates_to),
+            markup = "plain", kind = "message",
+            self = isTRUE(a$is_self),
+            mentions = unlist(a$mentions, use.names = FALSE),
+            encrypted = isTRUE(a$encrypted),
+            attachments = list(chat_attachment(
+                    id = as.character(a$url),
+                    name = if (is.null(name)) NA_character_ else
+                    as.character(name),
+                    mime = a$mime %||% NA_character_,
+                    bytes = if (is.null(a$size)) NA_integer_ else
+                    as.integer(a$size),
+                    url = as.character(a$url),
+                    sha256 = a$sha256 %||% NA_character_,
+                    raw = a)),
+            raw = a)
     }
     # Back into the order the homeserver sent them. Appending the
     # decrypted events put every one of them after every cleartext one,
@@ -739,6 +836,33 @@ chat_leave.chat_matrix <- function(client, channel, ...) {
 }
 
 #' @export
+chat_download.chat_matrix <- function(client, attachment, dest = NULL, ...) {
+    dest <- attachment_dest(attachment, dest)
+    # An encrypted attachment is refused rather than fetched. The bytes
+    # behind the mxc URL are ciphertext, and this adapter has no
+    # decryption path for media -- downloading them would hand the
+    # caller a file that is not the picture, with nothing to say so.
+    # The same bargain chat_send() makes refusing to upload into an
+    # encrypted room.
+    if (isTRUE(attachment$raw$encrypted)) {
+        stop("chat.api: attachment ", attachment$id, " is encrypted, and ",
+             "this adapter cannot decrypt media. Fetching it would ",
+             "write ciphertext to ", dest, ".", call. = FALSE)
+    }
+    url <- attachment$url
+    if (!is.character(url) || length(url) != 1L || is.na(url) || !nzchar(url)) {
+        stop("chat.api: attachment ", attachment$id,
+             " names no content to fetch.", call. = FALSE)
+    }
+    # Errors propagate, chat_react()'s reasoning: a fetch that quietly
+    # failed leaves the caller pointing at a path with no bytes.
+    sess <- mx.client::mx_client_session(client$env$mx)
+    download_fn <- client$download_fn %||% mx.api::mx_download
+    download_fn(sess, url, dest)
+    invisible(dest)
+}
+
+#' @export
 chat_get_state.chat_matrix <- function(client, channel, type, state_key = "",
                                        ...) {
     # mx_get_state() already answers NULL for state that is not set,
@@ -834,14 +958,19 @@ chat_capabilities.chat_matrix <- function(client, ...) {
          set_identity = TRUE, relogin = TRUE,
          channel_create = TRUE, leave = TRUE, set_state = TRUE,
          files = !isTRUE(client$e2ee),
-         # attachments is FALSE for the same structural reason
-         # thread_replies is: the only event source is
-         # mx.client::mx_extract_text_events(), which filters to text
-         # msgtypes, so m.image/m.file/m.audio/m.video never reach this
-         # adapter. Flip it when mx.client grows a media-aware
-         # extractor and chat_poll maps those events onto
-         # chat_attachment records.
-         attachments = FALSE,
+         # attachments tracks the installed mx.client, the way
+         # reaction_events does: mx_extract_media_events() arrived in
+         # 0.2.0.6, and on an older build the poll has no source for
+         # media at all. It covers both halves of inbound media --
+         # media messages come back out of chat_poll(), and
+         # chat_download() fetches their bytes.
+         #
+         # TRUE on an e2ee client too, unlike outbound files. The
+         # events are reported either way; what an encrypted
+         # attachment cannot do is be fetched, and chat_download()
+         # refuses that one rather than the whole room's media going
+         # unmentioned.
+         attachments = matrix_media_capable(client),
          typing = TRUE, e2ee = isTRUE(client$e2ee),
          identity_override = FALSE,
          # Empty on an e2ee client: the Megolm path builds its own HTML

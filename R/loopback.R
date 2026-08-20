@@ -103,6 +103,25 @@ chat_send.chat_loopback <- function(client, channel, text,
 }
 
 #' @export
+chat_download.chat_loopback <- function(client, attachment, dest = NULL, ...) {
+    dest <- attachment_dest(attachment, dest)
+    src <- attachment$path
+    # The reference adapter records the paths it was handed, so its
+    # attachments are already on disk and this is a copy. It still goes
+    # through the same verb, which is the point: a consumer writes one
+    # code path and loopback is the double it tests against.
+    if (!is.character(src) || length(src) != 1L || is.na(src) ||
+        !file.exists(src)) {
+        stop("chat_download(): attachment ", attachment$id,
+             " has no readable content.", call. = FALSE)
+    }
+    if (!file.copy(src, dest, overwrite = TRUE)) {
+        stop("chat_download(): could not write ", dest, call. = FALSE)
+    }
+    invisible(dest)
+}
+
+#' @export
 chat_poll.chat_loopback <- function(client, since = NULL, timeout = NULL, ...) {
     from <- if (is.null(since)) {
         0L

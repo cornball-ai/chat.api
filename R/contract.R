@@ -529,6 +529,64 @@ chat_attachment <- function(id, name = NA_character_, mime = NA_character_,
               class = "chat_attachment")
 }
 
+#' Fetch an attachment's bytes to a local file
+#'
+#' Inbound attachments name where their content lives, not what it is:
+#' \code{\link{chat_attachment}}'s \code{url} is a platform handle that
+#' usually needs this client's credentials, so a consumer cannot simply
+#' download it. This is the verb that turns one into a file on disk.
+#'
+#' Capability-gated on \code{chat_capabilities()$attachments}, the same
+#' flag that says inbound media arrives at all. The default method
+#' throws, on \code{\link{chat_react}}'s reasoning: a fetch that
+#' quietly did nothing leaves the caller pointing at a path with no
+#' bytes behind it.
+#'
+#' An attachment already on disk (\code{path} set, as the loopback
+#' adapter records) is copied rather than fetched, so a consumer needs
+#' one code path for both.
+#'
+#' @param client A \code{chat_client}.
+#' @param attachment A \code{\link{chat_attachment}} record, as carried
+#'   on a \code{\link{chat_message}}'s \code{attachments}.
+#' @param dest Destination path. NULL picks a temporary file, keeping
+#'   the attachment's extension where it has one.
+#' @param ... Adapter-specific options.
+#' @return The destination path, invisibly.
+#' @export
+chat_download <- function(client, attachment, dest = NULL, ...) {
+    UseMethod("chat_download")
+}
+
+#' @export
+chat_download.default <- function(client, attachment, dest = NULL, ...) {
+    stop("chat_download() is not supported by this adapter (",
+         paste(class(client), collapse = "/"),
+         "). Check chat_capabilities()$attachments.", call. = FALSE)
+}
+
+# A destination for an attachment with no caller-supplied one. The
+# extension rides along from the name, because a consumer handing the
+# file to something that sniffs by extension (an image encoder, a
+# viewer) should not have to rename it first.
+#
+# Matched here rather than with tools::file_ext(), which would put a
+# package in the Imports of one that has none.
+attachment_dest <- function(attachment, dest = NULL) {
+    if (!is.null(dest)) {
+        return(dest)
+    }
+    ext <- ""
+    nm <- attachment$name
+    if (is.character(nm) && length(nm) == 1L && !is.na(nm)) {
+        e <- regmatches(nm, regexpr("[.][[:alnum:]]+$", nm))
+        if (length(e)) {
+            ext <- e
+        }
+    }
+    tempfile("chat-attachment-", fileext = ext)
+}
+
 #' @export
 print.chat_attachment <- function(x, ...) {
     cat(sprintf("%s%s%s\n", x$id,

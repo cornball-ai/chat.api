@@ -1,8 +1,8 @@
 Package: chat.api
 Type: Package
 Title: Transport-Agnostic Chat Contract for R Agents
-Version: 0.0.1.23
-Date: 2026-08-18
+Version: 0.0.1.24
+Date: 2026-08-20
 Authors@R: c(
     person("Troy", "Hernandez", role = c("aut", "cre"),
            email = "troy@cornball.ai",
@@ -22,7 +22,7 @@ BugReports: https://github.com/cornball-ai/chat.api/issues
 Suggests:
     httr,
     mx.api,
-    mx.client (>= 0.2.0.4),
+    mx.client (>= 0.2.0.6),
     mx.crypto,
     slackr,
     tinytest
