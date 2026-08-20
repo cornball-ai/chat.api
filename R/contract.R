@@ -915,8 +915,7 @@ chat_get_state <- function(client, channel, type, state_key = "", ...) {
 }
 
 #' @export
-chat_get_state.default <- function(client, channel, type, state_key = "",
-                                   ...) {
+chat_get_state.default <- function(client, channel, type, state_key = "", ...) {
     stop("chat_get_state() is not supported by this adapter (",
          paste(class(client), collapse = "/"),
          "). Check chat_capabilities()$set_state.", call. = FALSE)

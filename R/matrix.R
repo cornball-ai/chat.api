@@ -159,10 +159,9 @@ chat_matrix <- function(app = NULL, path = NULL, save_cursor = TRUE,
                         .crypto = NULL, .save = NULL, .react = NULL,
                         .info = NULL, .members = NULL, .join = NULL,
                         .create = NULL, .leave = NULL, .state = NULL,
-                        .get_state = NULL,
-                        .channels = NULL, .history = NULL, .pending = NULL,
-                        .read = NULL, .identity = NULL, .edit = NULL,
-                        .rich = NULL) {
+                        .get_state = NULL, .channels = NULL, .history = NULL,
+                        .pending = NULL, .read = NULL, .identity = NULL,
+                        .edit = NULL, .rich = NULL) {
     seams <- list(.sync, .extract, .send, .media)
     if ((is.null(mx) || any(vapply(seams, is.null, logical(1)))) &&
         !requireNamespace("mx.client", quietly = TRUE)) {
