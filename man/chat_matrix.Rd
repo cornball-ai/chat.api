@@ -25,6 +25,7 @@ chat_matrix(
   .create = NULL,
   .leave = NULL,
   .state = NULL,
+  .get_state = NULL,
   .channels = NULL,
   .history = NULL,
   .pending = NULL,

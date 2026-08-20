@@ -56,6 +56,15 @@ chat_set_state.chat_loopback <- function(client, channel, type, content,
 }
 
 #' @export
+chat_get_state.chat_loopback <- function(client, channel, type,
+                                         state_key = "", ...) {
+    # NULL for state never written, which is the generic's contract and
+    # what makes the reference adapter usable as a test double for a
+    # consumer checking whether a marker is set.
+    client$env$state[[paste(channel, type, state_key, sep = "\r")]]
+}
+
+#' @export
 chat_send.chat_loopback <- function(client, channel, text,
                                     markup = c("plain", "markdown"),
                                     thread = NULL, reply_to = NULL,

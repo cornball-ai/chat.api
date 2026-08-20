@@ -1629,6 +1629,31 @@ expect_error(
                    "!a:ex", "ai.example.marker", list()),
     "M_FORBIDDEN")
 
+# Reading it back. mx_get_state() answers NULL for state that is not
+# set, which is the generic's contract, so nothing is absorbed here.
+local({
+    seen <- NULL
+    cl <- seam_client(.get_state = function(session, channel, type,
+                                            state_key = "") {
+        seen <<- list(channel = channel, type = type, state_key = state_key)
+        list(state = "segment")
+    })
+    expect_identical(chat_get_state(cl, "!a:ex", "ai.example.marker"),
+                     list(state = "segment"))
+    expect_identical(seen$channel, "!a:ex")
+    expect_identical(seen$type, "ai.example.marker")
+    expect_identical(seen$state_key, "")
+    chat_get_state(cl, "!a:ex", "ai.example.marker", state_key = "$root")
+    expect_identical(seen$state_key, "$root")
+})
+expect_null(chat_get_state(seam_client(.get_state = function(...) NULL),
+                           "!a:ex", "ai.example.marker"))
+# An unreachable state store is a different fact from absent state, and
+# still errors.
+expect_error(
+    chat_get_state(seam_client(.get_state = function(...) stop("HTTP 502")),
+                   "!a:ex", "ai.example.marker"), "HTTP 502")
+
 # ---- The record ----
 iv <- chat_invite(channel = "!a:ex", inviter = "@ann:ex")
 expect_inherits(iv, "chat_invite")

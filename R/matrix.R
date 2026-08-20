@@ -159,6 +159,7 @@ chat_matrix <- function(app = NULL, path = NULL, save_cursor = TRUE,
                         .crypto = NULL, .save = NULL, .react = NULL,
                         .info = NULL, .members = NULL, .join = NULL,
                         .create = NULL, .leave = NULL, .state = NULL,
+                        .get_state = NULL,
                         .channels = NULL, .history = NULL, .pending = NULL,
                         .read = NULL, .identity = NULL, .edit = NULL,
                         .rich = NULL) {
@@ -216,7 +217,7 @@ chat_matrix <- function(app = NULL, path = NULL, save_cursor = TRUE,
                    typing_fn = .typing, react_fn = .react,
                    info_fn = .info, members_fn = .members, join_fn = .join,
                    create_fn = .create, leave_fn = .leave,
-                   state_fn = .state,
+                   state_fn = .state, get_state_fn = .get_state,
                    channels_fn = .channels, history_fn = .history,
                    pending_fn = .pending, read_fn = .read,
                    identity_fn = .identity, edit_fn = .edit,
@@ -736,6 +737,17 @@ chat_leave.chat_matrix <- function(client, channel, ...) {
     leave_fn <- client$leave_fn %||% mx.api::mx_room_leave
     leave_fn(sess, channel)
     invisible(channel)
+}
+
+#' @export
+chat_get_state.chat_matrix <- function(client, channel, type, state_key = "",
+                                       ...) {
+    # mx_get_state() already answers NULL for state that is not set,
+    # which is this generic's contract, so no error is absorbed here: a
+    # homeserver that cannot be reached still propagates.
+    sess <- mx.client::mx_client_session(client$env$mx)
+    state_fn <- client$get_state_fn %||% mx.api::mx_get_state
+    state_fn(sess, channel, type, state_key = state_key)
 }
 
 #' @export
