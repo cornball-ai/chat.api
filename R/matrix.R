@@ -1092,9 +1092,9 @@ matrix_send_rich <- function(client, channel, text, rich, msgtype,
         # one, fallback included, so a rich threaded reply is threaded
         # in exactly the clients a plain one is.
         extra[["m.relates_to"]] <- list(
-            rel_type = "m.thread", event_id = thread,
-            is_falling_back = TRUE,
-            "m.in_reply_to" = list(event_id = thread))
+                                        rel_type = "m.thread", event_id = thread,
+                                        is_falling_back = TRUE,
+                                        "m.in_reply_to" = list(event_id = thread))
     }
     fn(sess, channel, text, msgtype = msgtype, extra = extra)
 }
