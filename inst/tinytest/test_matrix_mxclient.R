@@ -171,14 +171,51 @@ expect_equal(as.numeric(got$messages[[2L]]$ts), 1700000001, tolerance = 1e-6)
 # receives what it can send. The notice above does not come back.
 expect_false("a notice" %in% vapply(got$messages, `[[`, "", "body"))
 
-# The extractor drops content$m.relates_to, so a threaded reply arrives
-# with $thread empty and the relation unreachable from the message-level
-# raw. thread_replies reports FALSE for exactly this reason.
+# The record shape the adapter reads. The wire's content$m.relates_to
+# arrives as the record's `relates_to`, so nothing here looks for the
+# wire name.
 expect_true(all(c("room_id", "event_id", "sender", "is_self", "body",
                   "msgtype", "mentions") %in% names(m$raw)))
 expect_false("content" %in% names(m$raw))
 expect_null(m$raw[["m.relates_to"]])
-expect_false(chat_capabilities(p)$thread_replies)
+# An unthreaded message has no thread, and NULL is the answer.
+expect_null(m$thread)
+expect_true(chat_capabilities(p)$thread_replies)
+
+# ---- A thread survives the real extractor ----
+# The end of the round trip, against the installed mx.client rather
+# than a faked record: if that build ever stops carrying relates_to,
+# $thread goes quietly empty and rehydration downstream loses the
+# conversation it was keyed to. This is the line that would go red.
+local({
+    thr_sync <- list(rooms = list(join = list("!room:ex" = list(
+        timeline = list(events = list(
+            list(type = "m.room.message", event_id = "$t1",
+                 sender = "@alice:ex", origin_server_ts = 1700000003000,
+                 content = list(msgtype = "m.text", body = "in a thread",
+                     "m.relates_to" = list(rel_type = "m.thread",
+                         event_id = "$root", is_falling_back = TRUE,
+                         "m.in_reply_to" = list(event_id = "$root")))),
+            list(type = "m.room.message", event_id = "$t2",
+                 sender = "@alice:ex", origin_server_ts = 1700000004000,
+                 content = list(msgtype = "m.text", body = "a rich reply",
+                     "m.relates_to" = list(
+                         "m.in_reply_to" = list(event_id = "$orig"))))
+        ))))))
+    tp <- chat_matrix(mx = fake_mx(), save_cursor = FALSE,
+                      .sync = function(client, ...) {
+                          list(sync = thr_sync, client = fake_mx("s2"),
+                               first_run = FALSE)
+                      },
+                      .send = function(...) "$id",
+                      .media = function(...) NULL)
+    msgs <- chat_poll(tp)$messages
+    expect_identical(length(msgs), 2L)
+    expect_identical(msgs[[1L]]$thread, "$root")
+    # And a rich reply is still not a thread, through the real
+    # extractor as much as through a faked record.
+    expect_null(msgs[[2L]]$thread)
+})
 
 # ---- Resolve ----
 # Offline: mx_resolve_room short-circuits on a !-prefixed id and on an

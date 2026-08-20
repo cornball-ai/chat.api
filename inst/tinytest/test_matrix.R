@@ -292,14 +292,22 @@ expect_null(mapped$messages[[2L]]$mentions)
 threaded_sync <- wrap_sync(list(ev("$4", body = "in a thread",
     content = list("m.relates_to" = list(rel_type = "m.thread",
                                          event_id = "$root")))))
-tp <- seam_client(recs = list(rec("$4", body = "in a thread")),
+tp <- seam_client(recs = list(modifyList(rec("$4", body = "in a thread"),
+    list(relates_to = list(rel_type = "m.thread", event_id = "$root")))),
                   sync = threaded_sync)
 tres <- chat_poll(tp)
 tmsg <- tres$messages[[1L]]
 expect_identical(tmsg$body, "in a thread")
-expect_null(tmsg$thread)
-expect_false(chat_capabilities(tp)$thread_replies)
+# The relation reaches the message through the extractor record, which
+# is the only event source this adapter has -- not by re-walking the
+# sync behind it, which would duplicate the extractor's msgtype
+# filtering and break for anyone supplying their own .extract.
+expect_identical(tmsg$thread, "$root")
+expect_true(chat_capabilities(tp)$thread_replies)
+# The record's field is relates_to; nothing renames it to the wire's
+# m.relates_to on the way through.
 expect_null(tmsg$raw[["m.relates_to"]])
+expect_identical(tmsg$raw$relates_to$rel_type, "m.thread")
 expect_identical(
     tres$raw$rooms$join[["!room:ex"]]$timeline$events[[1L]]$content[["m.relates_to"]]$rel_type,
     "m.thread")
@@ -447,12 +455,14 @@ expect_identical(only, c("$media1", "$media2"))
 
 caps <- chat_capabilities(s)
 # Every flag answers "can this adapter do it", not "can Matrix do it".
-# Matrix threads are replies, not first-class channels
-expect_false(caps$threads)
-# thread_replies stays FALSE while chat_poll cannot fill in $thread:
-# mx_extract_text_events drops content$m.relates_to, so the relation
-# never reaches the adapter. The flag and the mapping move together.
-expect_false(caps$thread_replies)
+# threads is the send side: it needs an mx.client that can attach an
+# m.relates_to, which is 0.2.0.5 and later, so the flag tracks what is
+# installed rather than asserting it.
+expect_identical(caps$threads, chat.api:::matrix_threads_available())
+# thread_replies is the receive side, and needs nothing but the
+# extractor field every supported mx.client carries. The flag and the
+# mapping move together.
+expect_true(caps$thread_replies)
 # reactions is TRUE and there is a verb behind it, which is the whole
 # rule: a flag without its implementation is what this suite exists to
 # catch. reaction_events tracks the installed mx.client, since an older
@@ -595,6 +605,16 @@ expect_true(chat_capabilities(enc)$e2ee)
 # ... and files is FALSE, because mx_send_media posts a cleartext m.file
 # event whatever the room's encryption state says.
 expect_false(chat_capabilities(enc)$files)
+# ... and so is threads: the encrypted send path has nowhere to put an
+# m.relates_to. A threaded send is refused rather than posted to the
+# room's main timeline, which is files' bargain and not rich's -- a
+# reply that leaves its thread is misrouted, not merely undecorated.
+expect_false(chat_capabilities(enc)$threads)
+expect_error(chat_send(enc, "!enc:ex", "hi", thread = "$root"),
+             "leave the thread")
+# Reading threads still works on an encrypted client; only sending is
+# refused.
+expect_true(chat_capabilities(enc)$thread_replies)
 
 # A construction that would have died now survives to the first poll,
 # which is where relogin gets its chance.
@@ -1505,6 +1525,79 @@ local({
 # room the caller believes it has left.
 expect_error(chat_leave(seam_client(.leave = function(...) stop("M_UNKNOWN")),
                         "!a:ex"), "M_UNKNOWN")
+
+# ---- Threads ----
+# Inbound: only rel_type m.thread becomes $thread. A rich reply carries
+# an m.in_reply_to and no rel_type, and reading that as a thread would
+# report every quoted reply in a room as one -- chat_message has no
+# reply_to slot to tell them apart afterwards.
+local({
+    recs <- list(
+        rec("$plain"),
+        modifyList(rec("$thr"), list(relates_to = list(
+            rel_type = "m.thread", event_id = "$root",
+            is_falling_back = TRUE,
+            `m.in_reply_to` = list(event_id = "$root")))),
+        modifyList(rec("$reply"), list(relates_to = list(
+            `m.in_reply_to` = list(event_id = "$orig")))),
+        modifyList(rec("$edit"), list(relates_to = list(
+            rel_type = "m.replace", event_id = "$orig"))))
+    msgs <- chat_poll(seam_client(recs = recs))$messages
+    expect_null(msgs[[1L]]$thread)
+    expect_identical(msgs[[2L]]$thread, "$root")
+    # A threaded message carries m.in_reply_to too, as its fallback, so
+    # this is read off rel_type rather than the relation's presence.
+    expect_null(msgs[[3L]]$thread)
+    expect_null(msgs[[4L]]$thread)
+})
+
+# A relation naming no event is no thread, not a thread pointing nowhere.
+local({
+    recs <- list(modifyList(rec("$x"), list(relates_to = list(
+        rel_type = "m.thread", event_id = ""))))
+    expect_null(chat_poll(seam_client(recs = recs))$messages[[1L]]$thread)
+})
+
+# Outbound: the root reaches the send seam, and only when there is one.
+# Naming the argument unconditionally would break every install whose
+# mx.client predates it, on ordinary replies that use no thread at all.
+local({
+    seen <- NULL
+    cl <- seam_client(send = function(mx, text, room = NULL, ...) {
+        seen <<- list(text = text, args = list(...))
+        "$id"
+    })
+    chat_send(cl, "!a:ex", "ordinary")
+    expect_false("thread" %in% names(seen$args))
+    chat_send(cl, "!a:ex", "threaded", thread = "$root")
+    expect_identical(seen$args$thread, "$root")
+})
+
+# A rich threaded reply is threaded too: that path bypasses
+# mx_send_text, so it builds the same relation itself.
+local({
+    seen <- NULL
+    cl <- seam_client(.rich = function(session, channel, text, ...) {
+        seen <<- list(...)
+        "$id"
+    })
+    chat_send(cl, "!a:ex", "hi", rich = "<b>hi</b>", thread = "$root")
+    rel <- seen$extra$`m.relates_to`
+    expect_identical(rel$rel_type, "m.thread")
+    expect_identical(rel$event_id, "$root")
+    expect_true(rel$is_falling_back)
+    # And an unthreaded rich send carries no relation.
+    chat_send(cl, "!a:ex", "hi", rich = "<b>hi</b>")
+    expect_null(seen$extra$`m.relates_to`)
+})
+
+# Capabilities answer for this client. Reading a relation needs nothing
+# special; attaching one needs an mx.client new enough to carry it.
+local({
+    caps <- chat_capabilities(seam_client())
+    expect_true(caps$thread_replies)
+    expect_identical(caps$threads, chat.api:::matrix_threads_available())
+})
 
 # ---- Channel state ----
 # The seam replaces mx.api::mx_set_state. The default state_key is the
