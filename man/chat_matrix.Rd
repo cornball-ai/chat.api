@@ -26,6 +26,8 @@ chat_matrix(
   .leave = NULL,
   .state = NULL,
   .get_state = NULL,
+  .extract_media = NULL,
+  .download = NULL,
   .channels = NULL,
   .history = NULL,
   .pending = NULL,
@@ -173,6 +175,21 @@ replacing \code{mx.api::mx_room_name} and
 
 \item{.leave}{Testing seam: replacement for
 \code{mx.api::mx_room_leave}. Leave NULL in production.}
+
+\item{.state}{Testing seam: replacement for
+\code{mx.api::mx_set_state}. Leave NULL in production.}
+
+\item{.get_state}{Testing seam: replacement for
+\code{mx.api::mx_get_state}. Leave NULL in production.}
+
+\item{.extract_media}{Testing seam: replacement for
+\code{mx.client::mx_extract_media_events}. Leave NULL in
+production. Supplying it also flips
+\code{chat_capabilities()$attachments} on, since a seam is a media
+source like any other.}
+
+\item{.download}{Testing seam: replacement for
+\code{mx.api::mx_download}. Leave NULL in production.}
 
 \item{.channels}{Testing seam: replacement for
 \code{mx.api::mx_rooms}. Leave NULL in production.}

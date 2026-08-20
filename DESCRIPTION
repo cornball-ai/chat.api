@@ -22,7 +22,7 @@ BugReports: https://github.com/cornball-ai/chat.api/issues
 Suggests:
     httr,
     mx.api,
-    mx.client (>= 0.2.0.4),
+    mx.client (>= 0.2.0.6),
     mx.crypto,
     slackr,
     tinytest

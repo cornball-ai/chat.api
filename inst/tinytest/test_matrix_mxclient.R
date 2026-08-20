@@ -217,6 +217,55 @@ local({
     expect_null(msgs[[2L]]$thread)
 })
 
+# ---- Media through the real extractor ----
+# Every media assertion in test_matrix.R hands the adapter a record the
+# test wrote itself, so all of them would keep passing if
+# mx_extract_media_events() named its fields differently. This is the
+# one place the mapping meets the installed build.
+if ("mx_extract_media_events" %in% getNamespaceExports("mx.client")) {
+    med_formals <- names(formals(mx.client::mx_extract_media_events))
+    expect_identical(med_formals[1:2], c("sync_resp", "self_id"))
+
+    med_sync <- list(rooms = list(join = list("!room:ex" = list(
+        timeline = list(events = list(
+            list(type = "m.room.message", event_id = "$m1",
+                 sender = "@alice:ex", origin_server_ts = 1700000005000,
+                 content = list(msgtype = "m.image", body = "IMG_0942.png",
+                     url = "mxc://ex/abc",
+                     info = list(mimetype = "image/png", size = 4096))),
+            list(type = "m.room.message", event_id = "$m2",
+                 sender = "@alice:ex", origin_server_ts = 1700000006000,
+                 content = list(msgtype = "m.text", body = "what is this"))
+        ))))))
+    mp <- chat_matrix(mx = fake_mx(), save_cursor = FALSE,
+                      .sync = function(client, ...) {
+                          list(sync = med_sync, client = fake_mx("s3"),
+                               first_run = FALSE)
+                      },
+                      .send = function(...) "$id",
+                      .media = function(...) NULL)
+    mmsgs <- chat_poll(mp)$messages
+    # The picture and the question, in the order the room had them.
+    expect_identical(vapply(mmsgs, `[[`, "", "id"), c("$m1", "$m2"))
+    img <- mmsgs[[1L]]
+    expect_identical(img$body, "IMG_0942.png")
+    expect_identical(length(img$attachments), 1L)
+    # By value, not by class: every one of these is a field name the
+    # adapter reads off the record, and a rename upstream would leave
+    # an attachment that is present and empty.
+    att <- img$attachments[[1L]]
+    expect_identical(att$url, "mxc://ex/abc")
+    expect_identical(att$mime, "image/png")
+    expect_identical(att$bytes, 4096L)
+    expect_identical(att$name, "IMG_0942.png")
+    expect_false(isTRUE(att$raw$encrypted))
+    expect_equal(as.numeric(img$ts), 1700000005, tolerance = 1e-6)
+    # The text message beside it carries none, so a consumer testing
+    # length(attachments) is not answering yes for every message.
+    expect_null(mmsgs[[2L]]$attachments)
+    expect_true(chat_capabilities(mp)$attachments)
+}
+
 # ---- Resolve ----
 # Offline: mx_resolve_room short-circuits on a !-prefixed id and on an
 # empty name, so both paths run without a homeserver.
