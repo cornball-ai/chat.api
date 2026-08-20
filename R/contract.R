@@ -118,7 +118,9 @@ chat_resolve <- function(client, name, ...) {
 #'   \code{\link{chat_addressed}}), \code{channel_create}
 #'   (\code{\link{chat_channel_create}} works), \code{leave}
 #'   (\code{\link{chat_leave}} works), \code{set_state}
-#'   (\code{\link{chat_set_state}} works), \code{files} (outbound:
+#'   (durable channel state: both \code{\link{chat_set_state}} and
+#'   \code{\link{chat_get_state}} work -- a transport has the pair or
+#'   neither), \code{files} (outbound:
 #'   \code{chat_send(files =)} works), \code{attachments} (inbound:
 #'   media comes back out of \code{\link{chat_poll}} as
 #'   \code{\link{chat_attachment}} records), \code{typing},
@@ -882,6 +884,39 @@ chat_set_state <- function(client, channel, type, content, state_key = "",
 chat_set_state.default <- function(client, channel, type, content,
                                    state_key = "", ...) {
     stop("chat_set_state() is not supported by this adapter (",
+         paste(class(client), collapse = "/"),
+         "). Check chat_capabilities()$set_state.", call. = FALSE)
+}
+
+#' Read durable typed state from a channel
+#'
+#' The counterpart of \code{\link{chat_set_state}}, reading back what
+#' it wrote. Capability-gated on the same
+#' \code{chat_capabilities()$set_state}: a transport with durable
+#' channel state has both halves or neither.
+#'
+#' Absent state is \code{NULL}, not an error. "Nothing was ever
+#' written here" is an ordinary answer for a caller checking whether a
+#' marker is set, and one it should not have to wrap in a handler. A
+#' state store that cannot be reached at all still errors, because
+#' that is a different fact.
+#'
+#' @param client A \code{chat_client}.
+#' @param channel Channel/room identifier.
+#' @param type Character. Namespaced event type.
+#' @param state_key Character. Sub-key within the type, defaulting to
+#'   the empty string.
+#' @param ... Adapter-specific options.
+#' @return The stored content as a named list, or \code{NULL} when no
+#'   state is set for that \code{type}/\code{state_key} pair.
+#' @export
+chat_get_state <- function(client, channel, type, state_key = "", ...) {
+    UseMethod("chat_get_state")
+}
+
+#' @export
+chat_get_state.default <- function(client, channel, type, state_key = "", ...) {
+    stop("chat_get_state() is not supported by this adapter (",
          paste(class(client), collapse = "/"),
          "). Check chat_capabilities()$set_state.", call. = FALSE)
 }

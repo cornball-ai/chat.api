@@ -364,6 +364,31 @@ local({
     nothing <- structure(list(), class = c("chat_nothing", "chat_client"))
     expect_error(chat_set_state(nothing, "c", "t", list()),
                  "not supported by this adapter")
+    expect_error(chat_get_state(nothing, "c", "t"),
+                 "not supported by this adapter")
+})
+
+# Reading state back is the other half of the same capability.
+local({
+    lo <- chat_loopback()
+    # State never written reads as NULL rather than erroring: "no marker
+    # here" is an ordinary answer, and a caller checking for one should
+    # not need a handler to get it.
+    expect_null(chat_get_state(lo, "general", "ai.example.marker"))
+    chat_set_state(lo, "general", "ai.example.marker",
+                   list(state = "parked", since = "2026-08-20"))
+    expect_identical(chat_get_state(lo, "general", "ai.example.marker"),
+                     list(state = "parked", since = "2026-08-20"))
+    # Keyed by channel, type and state_key alike, so neither a
+    # different room nor a different key sees this one.
+    expect_null(chat_get_state(lo, "other", "ai.example.marker"))
+    expect_null(chat_get_state(lo, "general", "ai.other.marker"))
+    expect_null(chat_get_state(lo, "general", "ai.example.marker",
+                               state_key = "alt"))
+    # A write replaces the whole content, and the read sees that.
+    chat_set_state(lo, "general", "ai.example.marker", list(state = "active"))
+    expect_identical(chat_get_state(lo, "general", "ai.example.marker"),
+                     list(state = "active"))
 })
 
 # An adapter that cannot create says so.
