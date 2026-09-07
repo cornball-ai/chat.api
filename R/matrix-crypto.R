@@ -463,6 +463,73 @@ matrix_detect_encrypted_rooms <- function(sync) {
     out
 }
 
+# Persist ratchet state before any request transport. Olm and Megolm handles
+# mutate in place during sync processing, so a network error must never unwind
+# past this point and cause the same batch to replay against advanced ratchets.
+matrix_crypto_commit_key_requests <- function(
+    crypto, res, mx,
+    .send = mx.client::mx_crypto_send_key_requests,
+    .mark = mx.client::mx_crypto_mark_key_requests_sent,
+    .save = mx.client::mx_crypto_sessions_save) {
+    crypto$sessions <- res$sessions
+    .save(crypto$sessions, crypto$store)
+
+    sent <- list()
+    for (request in res$key_requests %||% list()) {
+        ok <- tryCatch({
+            .send(mx, list(request))
+            TRUE
+        }, error = function(e) {
+            warning("chat.api: Matrix room-key request send failed; it remains ",
+                    "queued: ", conditionMessage(e), call. = FALSE)
+            FALSE
+        })
+        if (ok) sent[[length(sent) + 1L]] <- request
+    }
+
+    if (length(sent)) {
+        crypto$sessions <- .mark(crypto$sessions, sent)
+        # Failure here is safe: the first save contains sent = FALSE, so a
+        # restart can resend the same stable request id. Keep the live copy
+        # marked to avoid a duplicate during this process.
+        tryCatch(
+            .save(crypto$sessions, crypto$store),
+            error = function(e) warning(
+                "chat.api: room-key request sent marker was not persisted; ",
+                "a restart may safely retry it: ", conditionMessage(e),
+                call. = FALSE))
+    }
+
+    for (cancellation in res$key_request_cancellations %||% list()) {
+        tryCatch(
+            .send(mx, list(cancellation)),
+            error = function(e) warning(
+                "chat.api: Matrix room-key request cancellation failed and ",
+                "was dropped: ", conditionMessage(e), call. = FALSE))
+    }
+    invisible(NULL)
+}
+
+# Reload the local authority when querying devices so bootstrap performed
+# after context initialization is picked up too. A missing/unreadable store
+# leaves our own devices untrusted without losing other users' device keys.
+matrix_crypto_known_devices <- function(
+    crypto, mx, user_ids,
+    .load = mx.client::mx_crypto_cross_signing_load,
+    .public = mx.crypto::mxc_signing_key_public,
+    .query = mx.client::mx_crypto_known_devices) {
+    master <- tryCatch({
+        keys <- .load(crypto$store)
+        if (is.null(keys)) NULL else .public(keys$master)
+    }, error = function(e) {
+        warning("chat.api: cannot load local cross-signing master; this ",
+                "user's devices will not be trusted for room-key recovery: ",
+                conditionMessage(e), call. = FALSE)
+        NULL
+    })
+    .query(mx, user_ids, self_master_key = master)
+}
+
 # Decrypt a sync: recover room keys from to-device, decrypt encrypted
 # timeline events, refresh the encrypted-room set. Mutates `crypto`.
 #
@@ -480,7 +547,7 @@ matrix_crypto_decrypt <- function(crypto, sync, mx) {
     }
     senders <- matrix_encrypted_senders(sync)
     devices <- if (length(senders)) {
-        tryCatch(mx.client::mx_crypto_known_devices(mx, senders),
+        tryCatch(matrix_crypto_known_devices(crypto, mx, senders),
                  error = function(e) NULL)
     } else {
         NULL
@@ -488,9 +555,9 @@ matrix_crypto_decrypt <- function(crypto, sync, mx) {
 
     res <- mx.client::mx_crypto_process_sync(
         crypto$account, crypto$sessions, sync, crypto$self_curve,
-        self_id = mx$user_id, devices = devices)
-    crypto$sessions <- res$sessions
-    mx.client::mx_crypto_sessions_save(crypto$sessions, crypto$store)
+        self_id = mx$user_id, devices = devices,
+        self_device_id = mx$device_id)
+    matrix_crypto_commit_key_requests(crypto, res, mx)
     res$events
 }
 

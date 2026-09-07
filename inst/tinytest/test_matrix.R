@@ -292,14 +292,22 @@ expect_null(mapped$messages[[2L]]$mentions)
 threaded_sync <- wrap_sync(list(ev("$4", body = "in a thread",
     content = list("m.relates_to" = list(rel_type = "m.thread",
                                          event_id = "$root")))))
-tp <- seam_client(recs = list(rec("$4", body = "in a thread")),
+tp <- seam_client(recs = list(modifyList(rec("$4", body = "in a thread"),
+    list(relates_to = list(rel_type = "m.thread", event_id = "$root")))),
                   sync = threaded_sync)
 tres <- chat_poll(tp)
 tmsg <- tres$messages[[1L]]
 expect_identical(tmsg$body, "in a thread")
-expect_null(tmsg$thread)
-expect_false(chat_capabilities(tp)$thread_replies)
+# The relation reaches the message through the extractor record, which
+# is the only event source this adapter has -- not by re-walking the
+# sync behind it, which would duplicate the extractor's msgtype
+# filtering and break for anyone supplying their own .extract.
+expect_identical(tmsg$thread, "$root")
+expect_true(chat_capabilities(tp)$thread_replies)
+# The record's field is relates_to; nothing renames it to the wire's
+# m.relates_to on the way through.
 expect_null(tmsg$raw[["m.relates_to"]])
+expect_identical(tmsg$raw$relates_to$rel_type, "m.thread")
 expect_identical(
     tres$raw$rooms$join[["!room:ex"]]$timeline$events[[1L]]$content[["m.relates_to"]]$rel_type,
     "m.thread")
@@ -447,12 +455,14 @@ expect_identical(only, c("$media1", "$media2"))
 
 caps <- chat_capabilities(s)
 # Every flag answers "can this adapter do it", not "can Matrix do it".
-# Matrix threads are replies, not first-class channels
-expect_false(caps$threads)
-# thread_replies stays FALSE while chat_poll cannot fill in $thread:
-# mx_extract_text_events drops content$m.relates_to, so the relation
-# never reaches the adapter. The flag and the mapping move together.
-expect_false(caps$thread_replies)
+# threads is the send side: it needs an mx.client that can attach an
+# m.relates_to, which is 0.2.0.5 and later, so the flag tracks what is
+# installed rather than asserting it.
+expect_identical(caps$threads, chat.api:::matrix_threads_available())
+# thread_replies is the receive side, and needs nothing but the
+# extractor field every supported mx.client carries. The flag and the
+# mapping move together.
+expect_true(caps$thread_replies)
 # reactions is TRUE and there is a verb behind it, which is the whole
 # rule: a flag without its implementation is what this suite exists to
 # catch. reaction_events tracks the installed mx.client, since an older
@@ -595,6 +605,16 @@ expect_true(chat_capabilities(enc)$e2ee)
 # ... and files is FALSE, because mx_send_media posts a cleartext m.file
 # event whatever the room's encryption state says.
 expect_false(chat_capabilities(enc)$files)
+# ... and so is threads: the encrypted send path has nowhere to put an
+# m.relates_to. A threaded send is refused rather than posted to the
+# room's main timeline, which is files' bargain and not rich's -- a
+# reply that leaves its thread is misrouted, not merely undecorated.
+expect_false(chat_capabilities(enc)$threads)
+expect_error(chat_send(enc, "!enc:ex", "hi", thread = "$root"),
+             "leave the thread")
+# Reading threads still works on an encrypted client; only sending is
+# refused.
+expect_true(chat_capabilities(enc)$thread_replies)
 
 # A construction that would have died now survives to the first poll,
 # which is where relogin gets its chance.
@@ -1505,6 +1525,261 @@ local({
 # room the caller believes it has left.
 expect_error(chat_leave(seam_client(.leave = function(...) stop("M_UNKNOWN")),
                         "!a:ex"), "M_UNKNOWN")
+
+# ---- Inbound media ----
+# A picture is its own m.room.message event on Matrix, so it comes back
+# as its own chat_message carrying one attachment -- the shape
+# chat_send() produces outbound, where each file is a separate event.
+media_rec <- function(event_id, url = "mxc://ex/abc", msgtype = "m.image",
+                      body = "IMG_0942.png", encrypted = FALSE,
+                      mime = "image/png", size = 4096L, ...) {
+    list(room_id = "!room:ex", event_id = event_id, sender = "@alice:ex",
+         is_self = FALSE, body = body, filename = NULL, msgtype = msgtype,
+         ts = 1700000000000, url = url, mime = mime, size = size,
+         sha256 = NULL, encrypted = encrypted, file = NULL,
+         mentions = NULL, relates_to = NULL, ...)
+}
+
+local({
+    # self_id is read, not ignored. The extractor tags the bot's own
+    # uploads with it, and a seam that never touches the argument leaves
+    # it an unforced promise -- which is how the first version of this
+    # shipped with an undefined variable there and every test agreed.
+    seen_self <- NULL
+    cl <- seam_client(recs = list(rec("$t1", body = "look at this")),
+                      .extract_media = function(sync, self_id) {
+                          seen_self <<- self_id
+                          list(media_rec("$img1"))
+                      })
+    msgs <- chat_poll(cl)$messages
+    expect_identical(seen_self, "@bot:ex")
+    expect_identical(length(msgs), 2L)
+    img <- Filter(function(m) length(m$attachments), msgs)[[1L]]
+    expect_identical(img$id, "$img1")
+    expect_identical(img$channel, "!room:ex")
+    # The filename Matrix ships as the event's text fallback is kept:
+    # it is what a client that cannot render the picture shows, and
+    # what a consumer writing a transcript has to write.
+    expect_identical(img$body, "IMG_0942.png")
+    expect_identical(img$kind, "message")
+    att <- img$attachments[[1L]]
+    expect_inherits(att, "chat_attachment")
+    expect_identical(att$url, "mxc://ex/abc")
+    expect_identical(att$mime, "image/png")
+    expect_identical(att$bytes, 4096L)
+    expect_identical(att$name, "IMG_0942.png")
+    # A text message in the same sync is untouched and carries none.
+    txt <- Filter(function(m) !length(m$attachments), msgs)[[1L]]
+    expect_identical(txt$body, "look at this")
+    expect_null(txt$attachments)
+})
+
+# Media rides the same ordering as everything else: a picture sent
+# before a comment must not arrive after it.
+local({
+    sync <- wrap_sync(list(ev("$img1"), ev("$t1")))
+    cl <- seam_client(recs = list(rec("$t1", body = "second")),
+                      sync = sync,
+                      .extract_media = function(sync, self_id) {
+                          list(media_rec("$img1", body = "first.png"))
+                      })
+    ids <- vapply(chat_poll(cl)$messages, function(m) m$id, character(1))
+    expect_identical(ids, c("$img1", "$t1"))
+})
+
+# A media extractor that throws costs the poll its media, not its text:
+# the room's actual conversation still arrives.
+local({
+    cl <- seam_client(recs = list(rec("$t1")),
+                      .extract_media = function(...) stop("malformed"))
+    expect_message(res <- chat_poll(cl), "media extraction failed")
+    expect_identical(length(res$messages), 1L)
+    expect_identical(res$messages[[1L]]$id, "$t1")
+})
+
+# ---- Fetching media ----
+local({
+    seen <- NULL
+    cl <- seam_client(.download = function(session, mxc_url, dest) {
+        seen <<- list(url = mxc_url, dest = dest)
+        writeBin(as.raw(1:8), dest)
+        dest
+    })
+    att <- chat_attachment(id = "mxc://ex/abc", name = "shot.png",
+                           url = "mxc://ex/abc",
+                           raw = list(encrypted = FALSE))
+    dest <- chat_download(cl, att)
+    expect_identical(seen$url, "mxc://ex/abc")
+    # The extension survives, so a consumer handing the file to
+    # something that sniffs by extension does not have to rename it.
+    expect_true(grepl("[.]png$", dest))
+    expect_true(file.exists(dest))
+})
+
+# An encrypted attachment is refused rather than fetched: the bytes
+# behind the URL are ciphertext and this adapter cannot decrypt media,
+# so downloading would write a file that is not the picture.
+local({
+    cl <- seam_client(.download = function(...) stop("must not fetch"))
+    enc_att <- chat_attachment(id = "mxc://ex/enc", name = "secret.png",
+                               url = "mxc://ex/enc",
+                               raw = list(encrypted = TRUE))
+    expect_error(chat_download(cl, enc_att), "cannot decrypt media")
+})
+
+# An attachment naming nothing to fetch fails before the network.
+expect_error(
+    chat_download(seam_client(.download = function(...) stop("must not fetch")),
+                  chat_attachment(id = "x")), "names no content")
+
+# The capability tracks the installed mx.client, and covers both
+# halves: media arriving, and its bytes being fetchable. A supplied
+# seam is a media source too, so it must not disagree with the poll
+# running right next to it in this file.
+local({
+    expect_identical(chat_capabilities(seam_client())$attachments,
+                     chat.api:::matrix_media_available())
+    expect_true(chat_capabilities(
+        seam_client(.extract_media = function(...) list()))$attachments)
+})
+
+# On an e2ee client media is still reported: the events arrive either
+# way, and what an encrypted attachment cannot do is be fetched.
+local({
+    cl <- seam_client(.extract_media = function(...) list(),
+                      e2ee = TRUE, .crypto = fake_crypto()$ops)
+    caps <- chat_capabilities(cl)
+    expect_true(caps$attachments)
+    expect_false(caps$files)
+})
+
+# ---- Threads ----
+# Inbound: only rel_type m.thread becomes $thread. A rich reply carries
+# an m.in_reply_to and no rel_type, and reading that as a thread would
+# report every quoted reply in a room as one -- chat_message has no
+# reply_to slot to tell them apart afterwards.
+local({
+    recs <- list(
+        rec("$plain"),
+        modifyList(rec("$thr"), list(relates_to = list(
+            rel_type = "m.thread", event_id = "$root",
+            is_falling_back = TRUE,
+            `m.in_reply_to` = list(event_id = "$root")))),
+        modifyList(rec("$reply"), list(relates_to = list(
+            `m.in_reply_to` = list(event_id = "$orig")))),
+        modifyList(rec("$edit"), list(relates_to = list(
+            rel_type = "m.replace", event_id = "$orig"))))
+    msgs <- chat_poll(seam_client(recs = recs))$messages
+    expect_null(msgs[[1L]]$thread)
+    expect_identical(msgs[[2L]]$thread, "$root")
+    # A threaded message carries m.in_reply_to too, as its fallback, so
+    # this is read off rel_type rather than the relation's presence.
+    expect_null(msgs[[3L]]$thread)
+    expect_null(msgs[[4L]]$thread)
+})
+
+# A relation naming no event is no thread, not a thread pointing nowhere.
+local({
+    recs <- list(modifyList(rec("$x"), list(relates_to = list(
+        rel_type = "m.thread", event_id = ""))))
+    expect_null(chat_poll(seam_client(recs = recs))$messages[[1L]]$thread)
+})
+
+# Outbound: the root reaches the send seam, and only when there is one.
+# Naming the argument unconditionally would break every install whose
+# mx.client predates it, on ordinary replies that use no thread at all.
+local({
+    seen <- NULL
+    cl <- seam_client(send = function(mx, text, room = NULL, ...) {
+        seen <<- list(text = text, args = list(...))
+        "$id"
+    })
+    chat_send(cl, "!a:ex", "ordinary")
+    expect_false("thread" %in% names(seen$args))
+    chat_send(cl, "!a:ex", "threaded", thread = "$root")
+    expect_identical(seen$args$thread, "$root")
+})
+
+# A rich threaded reply is threaded too: that path bypasses
+# mx_send_text, so it builds the same relation itself.
+local({
+    seen <- NULL
+    cl <- seam_client(.rich = function(session, channel, text, ...) {
+        seen <<- list(...)
+        "$id"
+    })
+    chat_send(cl, "!a:ex", "hi", rich = "<b>hi</b>", thread = "$root")
+    rel <- seen$extra$`m.relates_to`
+    expect_identical(rel$rel_type, "m.thread")
+    expect_identical(rel$event_id, "$root")
+    expect_true(rel$is_falling_back)
+    # And an unthreaded rich send carries no relation.
+    chat_send(cl, "!a:ex", "hi", rich = "<b>hi</b>")
+    expect_null(seen$extra$`m.relates_to`)
+})
+
+# Capabilities answer for this client. Reading a relation needs nothing
+# special; attaching one needs an mx.client new enough to carry it.
+local({
+    caps <- chat_capabilities(seam_client())
+    expect_true(caps$thread_replies)
+    expect_identical(caps$threads, chat.api:::matrix_threads_available())
+})
+
+# ---- Channel state ----
+# The seam replaces mx.api::mx_set_state. The default state_key is the
+# empty string, where most Matrix state lives, and it is passed by name
+# so a seam with the real signature receives it in the right slot.
+local({
+    seen <- NULL
+    cl <- seam_client(.state = function(session, channel, type, content,
+                                        state_key = "") {
+        seen <<- list(channel = channel, type = type, content = content,
+                      state_key = state_key)
+        "$st1"
+    })
+    expect_identical(chat_set_state(cl, "!a:ex", "ai.example.marker",
+                                    list(state = "parked")), "$st1")
+    expect_identical(seen$channel, "!a:ex")
+    expect_identical(seen$type, "ai.example.marker")
+    expect_identical(seen$content, list(state = "parked"))
+    expect_identical(seen$state_key, "")
+    chat_set_state(cl, "!a:ex", "ai.example.marker", list(),
+                   state_key = "alt")
+    expect_identical(seen$state_key, "alt")
+})
+
+# A failed write propagates: doing nothing quietly leaves a marker the
+# caller believes is set and no reader will ever see.
+expect_error(
+    chat_set_state(seam_client(.state = function(...) stop("M_FORBIDDEN")),
+                   "!a:ex", "ai.example.marker", list()),
+    "M_FORBIDDEN")
+
+# Reading it back. mx_get_state() answers NULL for state that is not
+# set, which is the generic's contract, so nothing is absorbed here.
+local({
+    seen <- NULL
+    cl <- seam_client(.get_state = function(session, channel, type,
+                                            state_key = "") {
+        seen <<- list(channel = channel, type = type, state_key = state_key)
+        list(state = "segment")
+    })
+    expect_identical(chat_get_state(cl, "!a:ex", "ai.example.marker"),
+                     list(state = "segment"))
+    expect_identical(seen$channel, "!a:ex")
+    expect_identical(seen$type, "ai.example.marker")
+    expect_identical(seen$state_key, "")
+    chat_get_state(cl, "!a:ex", "ai.example.marker", state_key = "$root")
+    expect_identical(seen$state_key, "$root")
+})
+expect_null(chat_get_state(seam_client(.get_state = function(...) NULL),
+                           "!a:ex", "ai.example.marker"))
+# An unreachable state store is a different fact from absent state, and
+# still errors.
+expect_error(
+    chat_get_state(seam_client(.get_state = function(...) stop("HTTP 502")),
+                   "!a:ex", "ai.example.marker"), "HTTP 502")
 
 # ---- The record ----
 iv <- chat_invite(channel = "!a:ex", inviter = "@ann:ex")

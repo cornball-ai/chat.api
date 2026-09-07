@@ -127,6 +127,17 @@
 #'   \code{mx.api::mx_room_create}. Leave NULL in production.
 #' @param .leave Testing seam: replacement for
 #'   \code{mx.api::mx_room_leave}. Leave NULL in production.
+#' @param .state Testing seam: replacement for
+#'   \code{mx.api::mx_set_state}. Leave NULL in production.
+#' @param .get_state Testing seam: replacement for
+#'   \code{mx.api::mx_get_state}. Leave NULL in production.
+#' @param .extract_media Testing seam: replacement for
+#'   \code{mx.client::mx_extract_media_events}. Leave NULL in
+#'   production. Supplying it also flips
+#'   \code{chat_capabilities()$attachments} on, since a seam is a media
+#'   source like any other.
+#' @param .download Testing seam: replacement for
+#'   \code{mx.api::mx_download}. Leave NULL in production.
 #' @param .channels Testing seam: replacement for
 #'   \code{mx.api::mx_rooms}. Leave NULL in production.
 #' @param .history Testing seam: replacement for
@@ -158,10 +169,11 @@ chat_matrix <- function(app = NULL, path = NULL, save_cursor = TRUE,
                         .send = NULL, .media = NULL, .typing = NULL,
                         .crypto = NULL, .save = NULL, .react = NULL,
                         .info = NULL, .members = NULL, .join = NULL,
-                        .create = NULL, .leave = NULL,
-                        .channels = NULL, .history = NULL, .pending = NULL,
-                        .read = NULL, .identity = NULL, .edit = NULL,
-                        .rich = NULL) {
+                        .create = NULL, .leave = NULL, .state = NULL,
+                        .get_state = NULL, .extract_media = NULL,
+                        .download = NULL, .channels = NULL, .history = NULL,
+                        .pending = NULL, .read = NULL, .identity = NULL,
+                        .edit = NULL, .rich = NULL) {
     seams <- list(.sync, .extract, .send, .media)
     if ((is.null(mx) || any(vapply(seams, is.null, logical(1)))) &&
         !requireNamespace("mx.client", quietly = TRUE)) {
@@ -216,6 +228,9 @@ chat_matrix <- function(app = NULL, path = NULL, save_cursor = TRUE,
                    typing_fn = .typing, react_fn = .react,
                    info_fn = .info, members_fn = .members, join_fn = .join,
                    create_fn = .create, leave_fn = .leave,
+                   state_fn = .state, get_state_fn = .get_state,
+                   extract_media_fn = .extract_media,
+                   download_fn = .download,
                    channels_fn = .channels, history_fn = .history,
                    pending_fn = .pending, read_fn = .read,
                    identity_fn = .identity, edit_fn = .edit,
@@ -299,6 +314,60 @@ matrix_reactions_available <- function() {
     "mx_extract_reactions" %in% getNamespaceExports("mx.client")
 }
 
+# Whether the installed mx.client can send into a thread. Probed rather
+# than assumed: mx_send_text() grew `thread` in 0.2.0.5, and against an
+# older one passing it is an unused-argument error on an ordinary
+# reply. Reporting the capability off what is installed lets a consumer
+# gate instead of discovering it mid-conversation.
+matrix_threads_available <- function() {
+    requireNamespace("mx.client", quietly = TRUE) &&
+    "thread" %in% names(formals(mx.client::mx_send_text))
+}
+
+# The sync's media events, as extractor records. Empty on an mx.client
+# with no media extractor, and empty rather than an error when the
+# extractor throws: a malformed media event must not cost the poll its
+# text messages, which are the traffic the room is actually having.
+matrix_media_records <- function(client, sync, self_id) {
+    # Forced here, outside the tryCatch, so a caller that cannot supply
+    # one is an error rather than a room with no pictures in it. R hands
+    # the argument to the seam as a promise, and a seam double that
+    # ignores it never forces it: the first version of this passed an
+    # undefined `self_id` and every seamed test agreed there was no
+    # problem.
+    force(self_id)
+    fn <- client$extract_media_fn
+    if (is.null(fn)) {
+        if (!matrix_media_available()) {
+            return(list())
+        }
+        fn <- mx.client::mx_extract_media_events
+    }
+    tryCatch(fn(sync, self_id), error = function(e) {
+        message("chat.api: media extraction failed: ", conditionMessage(e))
+        list()
+    })
+}
+
+# Whether the installed mx.client can report inbound media. Probed for
+# the same reason threads are: mx_extract_media_events() arrived in
+# 0.2.0.6, and on an older build the poll has no source for media at
+# all. A consumer reads the capability rather than discovering that
+# every image in a room is invisible.
+matrix_media_available <- function() {
+    requireNamespace("mx.client", quietly = TRUE) &&
+    "mx_extract_media_events" %in% getNamespaceExports("mx.client")
+}
+
+# What chat_capabilities() reports. A supplied seam is a media source
+# too, so a client built with one reports media on a runner where
+# mx.client is not installed at all -- the configuration the seamed
+# tests run in, and the one that would otherwise have the capability
+# disagreeing with the poll sitting right next to it.
+matrix_media_capable <- function(client) {
+    !is.null(client$extract_media_fn) || matrix_media_available()
+}
+
 # The sync's pending invites, as contract records.
 #
 # mx_extract_invite_records() carries the inviter, which is the whole of
@@ -345,6 +414,29 @@ matrix_order_by_position <- function(records, positions) {
 matrix_kind <- function(msgtype) {
     switch(msgtype %||% "m.text", m.notice = "notice", m.emote = "emote",
            "message")
+}
+
+# The thread root an event belongs to, from its m.relates_to, or NULL.
+#
+# Only rel_type "m.thread" counts. A rich reply carries an
+# m.in_reply_to with no rel_type, and reading that as a thread would
+# report every quoted reply in a room as one -- chat_message has no
+# reply_to slot to tell them apart afterwards, so the distinction has
+# to be made here. An edit (m.replace) is not a thread either.
+#
+# A threaded message also carries an m.in_reply_to inside the same
+# block as its reply fallback, which is why this reads rel_type and
+# not the presence of a relation.
+matrix_thread_root <- function(relates_to) {
+    if (!is.list(relates_to) ||
+        !identical(relates_to$rel_type %||% "", "m.thread")) {
+        return(NULL)
+    }
+    root <- relates_to$event_id
+    if (is.null(root) || !length(root) || !nzchar(as.character(root)[[1L]])) {
+        return(NULL)
+    }
+    as.character(root)[[1L]]
 }
 
 # The same mapping, but NA rather than "message" for a msgtype the
@@ -455,6 +547,7 @@ chat_poll.chat_matrix <- function(client, since = NULL, timeout = NULL, ...) {
                      channel = as.character(r$room_id),
                      sender = as.character(r$sender),
                      body = as.character(r$body), ts = ts,
+                     thread = matrix_thread_root(r$relates_to),
                      markup = "plain", kind = matrix_kind(r$msgtype),
                      self = isTRUE(r$is_self),
                      mentions = unlist(r$mentions, use.names = FALSE),
@@ -474,12 +567,52 @@ chat_poll.chat_matrix <- function(client, since = NULL, timeout = NULL, ...) {
             body = as.character(d$body),
             ts = if (is.null(ms)) as.POSIXct(NA) else
             as.POSIXct(ms / 1000, origin = "1970-01-01"),
+            thread = matrix_thread_root(d$relates_to),
             markup = "plain", kind = matrix_kind(d$msgtype),
             self = isTRUE(d$is_self),
             mentions = unlist(d$mentions, use.names = FALSE),
             encrypted = TRUE,
             sender_verified = isTRUE(d$sender_verified),
             raw = d)
+    }
+    # Inbound media. A picture is its own m.room.message event on
+    # Matrix, so it becomes its own chat_message carrying one
+    # attachment -- the same shape chat_send() produces outbound, where
+    # each file is sent as a separate event.
+    #
+    # The text extractor filters to text msgtypes, so without this pass
+    # an image is not merely unreadable, it is invisible: nothing in the
+    # room's traffic says a picture was ever sent.
+    for (a in matrix_media_records(client, res$sync, res$client$user_id)) {
+        ms <- a$ts %||% event_ts[[as.character(a$event_id)]]
+        name <- a$filename %||% a$body
+        messages[[length(messages) + 1L]] <- chat_message(
+            id = as.character(a$event_id),
+            channel = as.character(a$room_id),
+            sender = as.character(a$sender),
+            # The body is the filename Matrix ships as the event's
+            # text fallback. Kept, because it is what a client that
+            # cannot render the picture shows, and what a consumer
+            # writing a transcript has to write.
+            body = as.character(a$body %||% ""),
+            ts = if (is.null(ms)) as.POSIXct(NA) else
+            as.POSIXct(ms / 1000, origin = "1970-01-01"),
+            thread = matrix_thread_root(a$relates_to),
+            markup = "plain", kind = "message",
+            self = isTRUE(a$is_self),
+            mentions = unlist(a$mentions, use.names = FALSE),
+            encrypted = isTRUE(a$encrypted),
+            attachments = list(chat_attachment(
+                    id = as.character(a$url),
+                    name = if (is.null(name)) NA_character_ else
+                    as.character(name),
+                    mime = a$mime %||% NA_character_,
+                    bytes = if (is.null(a$size)) NA_integer_ else
+                    as.integer(a$size),
+                    url = as.character(a$url),
+                    sha256 = a$sha256 %||% NA_character_,
+                    raw = a)),
+            raw = a)
     }
     # Back into the order the homeserver sent them. Appending the
     # decrypted events put every one of them after every cleartext one,
@@ -538,6 +671,20 @@ chat_send.chat_matrix <- function(client, channel, text,
     crypto <- matrix_crypto_require(client)
     encrypted <- !is.null(crypto) &&
     client$crypto_ops$encrypted(crypto, client$env$mx, channel)
+    if (encrypted && !is.null(thread)) {
+        # Refused rather than dropped, which is the bargain files gets
+        # and rich does not. crypto_ops$send() has nowhere to put a
+        # relation, so the message would arrive -- in the room's main
+        # timeline instead of the thread it answers. That is a routing
+        # failure, not lost decoration: the reply lands where nobody is
+        # looking, and a consumer keying state off the thread never sees
+        # it again. chat_capabilities()$threads is FALSE on an e2ee
+        # client so a caller can know beforehand.
+        stop("chat.api: cannot send into a thread in the encrypted room ",
+             channel, ". The encrypted send path carries no m.relates_to, ",
+             "so the reply would leave the thread. Check ",
+             "chat_capabilities()$threads.", call. = FALSE)
+    }
     if (encrypted && !is.null(files)) {
         # mx_send_media() posts an ordinary cleartext m.file event: the
         # upload is not encrypted, and neither is the URL. There is no
@@ -587,12 +734,20 @@ chat_send.chat_matrix <- function(client, channel, text,
             # A different function, because mx_send_text() renders its
             # own HTML from markdown and has no argument for a supplied
             # one. mx_send() takes the content wholesale.
-            event <- matrix_send_rich(client, channel, text, rich, msgtype)
+            event <- matrix_send_rich(client, channel, text, rich, msgtype,
+                                      thread = thread)
             return(invisible(c(media_ids, as.character(event))))
         }
-        event <- client$send_fn(client$env$mx, text, room = channel,
-                                msgtype = msgtype,
-                                markdown = identical(markup, "markdown"), ...)
+        # thread is passed only when there is one. An mx.client older
+        # than 0.2.0.5 has no such argument, and naming it unconditionally
+        # would turn every ordinary reply into an unused-argument error
+        # on installs that never send into a thread at all.
+        args <- list(client$env$mx, text, room = channel, msgtype = msgtype,
+                     markdown = identical(markup, "markdown"), ...)
+        if (!is.null(thread)) {
+            args$thread <- thread
+        }
+        event <- do.call(client$send_fn, args)
         return(invisible(c(media_ids, as.character(event))))
     }
     invisible(media_ids)
@@ -681,6 +836,56 @@ chat_leave.chat_matrix <- function(client, channel, ...) {
 }
 
 #' @export
+chat_download.chat_matrix <- function(client, attachment, dest = NULL, ...) {
+    dest <- attachment_dest(attachment, dest)
+    # An encrypted attachment is refused rather than fetched. The bytes
+    # behind the mxc URL are ciphertext, and this adapter has no
+    # decryption path for media -- downloading them would hand the
+    # caller a file that is not the picture, with nothing to say so.
+    # The same bargain chat_send() makes refusing to upload into an
+    # encrypted room.
+    if (isTRUE(attachment$raw$encrypted)) {
+        stop("chat.api: attachment ", attachment$id, " is encrypted, and ",
+             "this adapter cannot decrypt media. Fetching it would ",
+             "write ciphertext to ", dest, ".", call. = FALSE)
+    }
+    url <- attachment$url
+    if (!is.character(url) || length(url) != 1L || is.na(url) || !nzchar(url)) {
+        stop("chat.api: attachment ", attachment$id,
+             " names no content to fetch.", call. = FALSE)
+    }
+    # Errors propagate, chat_react()'s reasoning: a fetch that quietly
+    # failed leaves the caller pointing at a path with no bytes.
+    sess <- mx.client::mx_client_session(client$env$mx)
+    download_fn <- client$download_fn %||% mx.api::mx_download
+    download_fn(sess, url, dest)
+    invisible(dest)
+}
+
+#' @export
+chat_get_state.chat_matrix <- function(client, channel, type, state_key = "",
+                                       ...) {
+    # mx_get_state() already answers NULL for state that is not set,
+    # which is this generic's contract, so no error is absorbed here: a
+    # homeserver that cannot be reached still propagates.
+    sess <- mx.client::mx_client_session(client$env$mx)
+    state_fn <- client$get_state_fn %||% mx.api::mx_get_state
+    state_fn(sess, channel, type, state_key = state_key)
+}
+
+#' @export
+chat_set_state.chat_matrix <- function(client, channel, type, content,
+                                       state_key = "", ...) {
+    # Errors propagate, chat_react()'s reasoning: a state write that
+    # quietly failed leaves a marker the caller believes is set and no
+    # reader will ever see.
+    sess <- mx.client::mx_client_session(client$env$mx)
+    state_fn <- client$state_fn %||% mx.api::mx_set_state
+    invisible(as.character(state_fn(sess, channel, type, content,
+                                    state_key = state_key)))
+}
+
+#' @export
 chat_members.chat_matrix <- function(client, channel, ...) {
     # Errors propagate. An empty room and an unanswerable question are
     # different things, and character() has to mean only the first.
@@ -696,17 +901,21 @@ chat_resolve.chat_matrix <- function(client, name, ...) {
 
 #' @export
 chat_capabilities.chat_matrix <- function(client, ...) {
-    # thread_replies is FALSE because chat_poll cannot populate
-    # chat_message$thread. Its only event source is
-    # mx.client::mx_extract_text_events(), which returns room_id,
-    # event_id, sender, is_self, body, msgtype, and mentions -- it drops
-    # content$m.relates_to, so the relation never reaches this adapter.
-    # Re-walking the raw sync behind the extractor would duplicate its
-    # msgtype filtering and quietly break for anyone supplying .extract.
-    # Mapping m.in_reply_to into $thread would be worse: chat_message
-    # has no reply_to slot, so plain rich replies would report as
-    # threads. Flip this to TRUE when mx.client surfaces relations and
-    # chat_poll maps a real m.thread rel_type.
+    # thread_replies is TRUE: mx_extract_text_events() carries the
+    # event's m.relates_to, and chat_poll maps a real m.thread rel_type
+    # onto chat_message$thread. Only that rel_type counts -- a rich
+    # reply's m.in_reply_to is deliberately not read as a thread,
+    # because chat_message has no reply_to slot to tell the two apart
+    # downstream. Unconditional, because reading a relation needs
+    # nothing of the installed mx.client but the field, absent on none
+    # this package supports.
+    #
+    # threads (the send side) is conditional twice over. It needs an
+    # mx.client that can attach the relation, which is 0.2.0.5 and
+    # later; and it is FALSE on an e2ee client, where the encrypted
+    # send path has nowhere to put an m.relates_to and chat_send()
+    # refuses a threaded send rather than posting it to the room's
+    # main timeline.
     #
     # Every flag here answers "can this adapter do it", not "can Matrix
     # do it". Matrix has reactions and E2EE; this adapter reaches
@@ -735,7 +944,8 @@ chat_capabilities.chat_matrix <- function(client, ...) {
     # adapter has no encrypted-attachment path, so chat_send() refuses
     # attachments to an encrypted room. TRUE would advertise something
     # that fails in exactly the rooms such a client exists for.
-    list(threads = FALSE, thread_replies = FALSE,
+    list(threads = matrix_threads_available() && !isTRUE(client$e2ee),
+         thread_replies = TRUE,
          # Refused in encrypted rooms: an edit carries its replacement
          # text in an ordinary event, and there is no Megolm path that
          # can carry a relation. Same bargain as files.
@@ -746,16 +956,21 @@ chat_capabilities.chat_matrix <- function(client, ...) {
          channels = TRUE, history = TRUE,
          pending = matrix_invites_available(), mark_read = TRUE,
          set_identity = TRUE, relogin = TRUE,
-         channel_create = TRUE, leave = TRUE,
+         channel_create = TRUE, leave = TRUE, set_state = TRUE,
          files = !isTRUE(client$e2ee),
-         # attachments is FALSE for the same structural reason
-         # thread_replies is: the only event source is
-         # mx.client::mx_extract_text_events(), which filters to text
-         # msgtypes, so m.image/m.file/m.audio/m.video never reach this
-         # adapter. Flip it when mx.client grows a media-aware
-         # extractor and chat_poll maps those events onto
-         # chat_attachment records.
-         attachments = FALSE,
+         # attachments tracks the installed mx.client, the way
+         # reaction_events does: mx_extract_media_events() arrived in
+         # 0.2.0.6, and on an older build the poll has no source for
+         # media at all. It covers both halves of inbound media --
+         # media messages come back out of chat_poll(), and
+         # chat_download() fetches their bytes.
+         #
+         # TRUE on an e2ee client too, unlike outbound files. The
+         # events are reported either way; what an encrypted
+         # attachment cannot do is be fetched, and chat_download()
+         # refuses that one rather than the whole room's media going
+         # unmentioned.
+         attachments = matrix_media_capable(client),
          typing = TRUE, e2ee = isTRUE(client$e2ee),
          identity_override = FALSE,
          # Empty on an e2ee client: the Megolm path builds its own HTML
@@ -896,6 +1111,7 @@ chat_history.chat_matrix <- function(client, channel, limit = 50L,
             body = as.character(ev$content$body %||% ""),
             ts = if (is.null(ms)) as.POSIXct(NA) else
             as.POSIXct(ms / 1000, origin = "1970-01-01"),
+            thread = matrix_thread_root(ev$content[["m.relates_to"]]),
             markup = "plain", kind = kind,
             self = identical(ev$sender, client$env$mx$user_id),
             mentions = unlist(ev$content[["m.mentions"]]$user_ids,
@@ -1004,11 +1220,23 @@ chat_edit.chat_matrix <- function(client, channel, message_id, text,
 # text is still the body. Matrix's own model is a plain body plus an
 # optional formatted one, and a client that cannot render the markup --
 # or a push notification, which never does -- shows the body.
-matrix_send_rich <- function(client, channel, text, rich, msgtype) {
+matrix_send_rich <- function(client, channel, text, rich, msgtype,
+                             thread = NULL) {
     sess <- mx.client::mx_client_session(client$env$mx)
     fn <- client$rich_fn %||% mx.api::mx_send
-    fn(sess, channel, text, msgtype = msgtype,
-        extra = list(format = "org.matrix.custom.html", formatted_body = rich))
+    extra <- list(format = "org.matrix.custom.html", formatted_body = rich)
+    if (!is.null(thread)) {
+        # Built here rather than borrowed from mx_send_text(), which
+        # this path exists to bypass: it renders its own HTML and has
+        # nowhere to put a supplied fragment. The relation is the same
+        # one, fallback included, so a rich threaded reply is threaded
+        # in exactly the clients a plain one is.
+        extra[["m.relates_to"]] <- list(
+                                        rel_type = "m.thread", event_id = thread,
+                                        is_falling_back = TRUE,
+                                        "m.in_reply_to" = list(event_id = thread))
+    }
+    fn(sess, channel, text, msgtype = msgtype, extra = extra)
 }
 
 # The contract's kind vocabulary as a Matrix msgtype, plus a documented

@@ -10,6 +10,32 @@ if (!requireNamespace("mx.client", quietly = TRUE)) {
     exit_file("mx.client not installed")
 }
 
+# Device queries use the local master even when bootstrap happens after the
+# crypto context was built. Missing/corrupt keys must never trust a server pin.
+if (requireNamespace("mx.crypto", quietly = TRUE) &&
+    utils::packageVersion("mx.crypto") >= "0.2.1.1") local({
+    store <- tempfile("pin-store-")
+    dir.create(store)
+    on.exit(unlink(store, recursive = TRUE), add = TRUE)
+    crypto <- list(store = store)
+    mx <- list(user_id = "@bot:example.org")
+    query <- function(client, user_ids, self_master_key) {
+        expect_identical(client, mx)
+        expect_identical(user_ids, mx$user_id)
+        list(pin = self_master_key)
+    }
+    lookup <- function() chat.api:::matrix_crypto_known_devices(
+        crypto, mx, mx$user_id, .query = query)
+    expect_null(lookup()$pin)
+    keys <- mx.client:::mx_crypto_cross_signing_new()
+    mx.client:::mx_crypto_cross_signing_save(keys, store)
+    expect_identical(lookup()$pin,
+                     mx.crypto::mxc_signing_key_public(keys$master))
+    writeLines("corrupt", file.path(store, "cross-signing.json"))
+    expect_warning(untrusted <- lookup(), "cannot load local cross-signing")
+    expect_null(untrusted$pin)
+})
+
 # ---- API drift ----
 # Membership is not enough: the adapter passes the first one or two
 # arguments positionally, so an upstream reorder would keep every name
@@ -171,14 +197,100 @@ expect_equal(as.numeric(got$messages[[2L]]$ts), 1700000001, tolerance = 1e-6)
 # receives what it can send. The notice above does not come back.
 expect_false("a notice" %in% vapply(got$messages, `[[`, "", "body"))
 
-# The extractor drops content$m.relates_to, so a threaded reply arrives
-# with $thread empty and the relation unreachable from the message-level
-# raw. thread_replies reports FALSE for exactly this reason.
+# The record shape the adapter reads. The wire's content$m.relates_to
+# arrives as the record's `relates_to`, so nothing here looks for the
+# wire name.
 expect_true(all(c("room_id", "event_id", "sender", "is_self", "body",
                   "msgtype", "mentions") %in% names(m$raw)))
 expect_false("content" %in% names(m$raw))
 expect_null(m$raw[["m.relates_to"]])
-expect_false(chat_capabilities(p)$thread_replies)
+# An unthreaded message has no thread, and NULL is the answer.
+expect_null(m$thread)
+expect_true(chat_capabilities(p)$thread_replies)
+
+# ---- A thread survives the real extractor ----
+# The end of the round trip, against the installed mx.client rather
+# than a faked record: if that build ever stops carrying relates_to,
+# $thread goes quietly empty and rehydration downstream loses the
+# conversation it was keyed to. This is the line that would go red.
+local({
+    thr_sync <- list(rooms = list(join = list("!room:ex" = list(
+        timeline = list(events = list(
+            list(type = "m.room.message", event_id = "$t1",
+                 sender = "@alice:ex", origin_server_ts = 1700000003000,
+                 content = list(msgtype = "m.text", body = "in a thread",
+                     "m.relates_to" = list(rel_type = "m.thread",
+                         event_id = "$root", is_falling_back = TRUE,
+                         "m.in_reply_to" = list(event_id = "$root")))),
+            list(type = "m.room.message", event_id = "$t2",
+                 sender = "@alice:ex", origin_server_ts = 1700000004000,
+                 content = list(msgtype = "m.text", body = "a rich reply",
+                     "m.relates_to" = list(
+                         "m.in_reply_to" = list(event_id = "$orig"))))
+        ))))))
+    tp <- chat_matrix(mx = fake_mx(), save_cursor = FALSE,
+                      .sync = function(client, ...) {
+                          list(sync = thr_sync, client = fake_mx("s2"),
+                               first_run = FALSE)
+                      },
+                      .send = function(...) "$id",
+                      .media = function(...) NULL)
+    msgs <- chat_poll(tp)$messages
+    expect_identical(length(msgs), 2L)
+    expect_identical(msgs[[1L]]$thread, "$root")
+    # And a rich reply is still not a thread, through the real
+    # extractor as much as through a faked record.
+    expect_null(msgs[[2L]]$thread)
+})
+
+# ---- Media through the real extractor ----
+# Every media assertion in test_matrix.R hands the adapter a record the
+# test wrote itself, so all of them would keep passing if
+# mx_extract_media_events() named its fields differently. This is the
+# one place the mapping meets the installed build.
+if ("mx_extract_media_events" %in% getNamespaceExports("mx.client")) {
+    med_formals <- names(formals(mx.client::mx_extract_media_events))
+    expect_identical(med_formals[1:2], c("sync_resp", "self_id"))
+
+    med_sync <- list(rooms = list(join = list("!room:ex" = list(
+        timeline = list(events = list(
+            list(type = "m.room.message", event_id = "$m1",
+                 sender = "@alice:ex", origin_server_ts = 1700000005000,
+                 content = list(msgtype = "m.image", body = "IMG_0942.png",
+                     url = "mxc://ex/abc",
+                     info = list(mimetype = "image/png", size = 4096))),
+            list(type = "m.room.message", event_id = "$m2",
+                 sender = "@alice:ex", origin_server_ts = 1700000006000,
+                 content = list(msgtype = "m.text", body = "what is this"))
+        ))))))
+    mp <- chat_matrix(mx = fake_mx(), save_cursor = FALSE,
+                      .sync = function(client, ...) {
+                          list(sync = med_sync, client = fake_mx("s3"),
+                               first_run = FALSE)
+                      },
+                      .send = function(...) "$id",
+                      .media = function(...) NULL)
+    mmsgs <- chat_poll(mp)$messages
+    # The picture and the question, in the order the room had them.
+    expect_identical(vapply(mmsgs, `[[`, "", "id"), c("$m1", "$m2"))
+    img <- mmsgs[[1L]]
+    expect_identical(img$body, "IMG_0942.png")
+    expect_identical(length(img$attachments), 1L)
+    # By value, not by class: every one of these is a field name the
+    # adapter reads off the record, and a rename upstream would leave
+    # an attachment that is present and empty.
+    att <- img$attachments[[1L]]
+    expect_identical(att$url, "mxc://ex/abc")
+    expect_identical(att$mime, "image/png")
+    expect_identical(att$bytes, 4096L)
+    expect_identical(att$name, "IMG_0942.png")
+    expect_false(isTRUE(att$raw$encrypted))
+    expect_equal(as.numeric(img$ts), 1700000005, tolerance = 1e-6)
+    # The text message beside it carries none, so a consumer testing
+    # length(attachments) is not answering yes for every message.
+    expect_null(mmsgs[[2L]]$attachments)
+    expect_true(chat_capabilities(mp)$attachments)
+}
 
 # ---- Resolve ----
 # Offline: mx_resolve_room short-circuits on a !-prefixed id and on an
@@ -996,4 +1108,82 @@ local({
                       })
     expect_error(chat_set_identity(cl, "x"), "M_LIMIT_EXCEEDED")
     expect_identical(cl$env$mx$token, "rotated")
+})
+
+# Crypto state is committed before request transport. Failed requests remain
+# unsent and retryable; successful requests are marked only after transport;
+# cancellation failure is warning-only.
+local({
+    req_ok <- list(request_id = "ok", content = list(action = "request"))
+    req_fail <- list(request_id = "fail", content = list(action = "request"))
+    cancel <- list(request_id = "cancel",
+                   content = list(action = "request_cancellation"))
+    sessions <- list(key_requests = list(
+        a = c(req_ok, list(sent = FALSE)),
+        b = c(req_fail, list(sent = FALSE))))
+    res <- list(sessions = sessions, key_requests = list(req_ok, req_fail),
+                key_request_cancellations = list(cancel))
+    crypto <- new.env(parent = emptyenv())
+    crypto$sessions <- list()
+    crypto$store <- "unused"
+    ops <- character()
+    snapshots <- list()
+    save <- function(sessions, store) {
+        ops <<- c(ops, "save")
+        snapshots[[length(snapshots) + 1L]] <<- sessions
+        invisible(store)
+    }
+    send <- function(mx, requests) {
+        id <- requests[[1L]]$request_id
+        ops <<- c(ops, paste0("send:", id))
+        if (id %in% c("fail", "cancel")) stop("offline")
+        invisible(list())
+    }
+    mark <- function(sessions, requests) {
+        ids <- vapply(requests, `[[`, character(1), "request_id")
+        for (key in names(sessions$key_requests)) {
+            if (sessions$key_requests[[key]]$request_id %in% ids)
+                sessions$key_requests[[key]]$sent <- TRUE
+        }
+        sessions
+    }
+    warnings <- character()
+    withCallingHandlers(
+        chat.api:::matrix_crypto_commit_key_requests(
+            crypto, res, list(), .send = send, .mark = mark, .save = save),
+        warning = function(w) {
+            warnings <<- c(warnings, conditionMessage(w))
+            invokeRestart("muffleWarning")
+        })
+    expect_identical(ops,
+        c("save", "send:ok", "send:fail", "save", "send:cancel"))
+    expect_equal(length(snapshots), 2L)
+    expect_false(snapshots[[1L]]$key_requests$a$sent)
+    expect_true(snapshots[[2L]]$key_requests$a$sent)
+    expect_false(snapshots[[2L]]$key_requests$b$sent)
+    expect_true(crypto$sessions$key_requests$a$sent)
+    expect_false(crypto$sessions$key_requests$b$sent)
+    expect_equal(length(warnings), 2L)
+})
+
+# A post-send marker-save failure is warning-only. The first snapshot remains
+# safely retryable and the live state avoids an immediate duplicate.
+local({
+    request <- list(request_id = "ok", content = list(action = "request"))
+    sessions <- list(key_requests = list(
+        a = c(request, list(sent = FALSE))))
+    res <- list(sessions = sessions, key_requests = list(request),
+                key_request_cancellations = list())
+    crypto <- new.env(parent = emptyenv())
+    crypto$store <- "unused"
+    saves <- 0L
+    save <- function(...) {
+        saves <<- saves + 1L
+        if (saves == 2L) stop("disk full")
+    }
+    expect_warning(chat.api:::matrix_crypto_commit_key_requests(
+        crypto, res, list(), .send = function(...) NULL,
+        .mark = function(s, r) { s$key_requests$a$sent <- TRUE; s },
+        .save = save), "restart may safely retry")
+    expect_true(crypto$sessions$key_requests$a$sent)
 })

@@ -338,6 +338,100 @@ local({
     expect_error(chat_leave(lo, "general"), "not supported by this adapter")
 })
 
+# ---- Channel state on the reference adapter ----
+# A write is durable and keyed by channel/type/state_key; a second
+# write to the same key replaces the content whole, never merges.
+local({
+    lo <- chat_loopback()
+    expect_true(chat_capabilities(lo)$set_state)
+    id <- chat_set_state(lo, "general", "ai.example.marker",
+                         list(state = "parked", since = "2026-08-19"))
+    expect_true(is.character(id) && nzchar(id))
+    key <- paste("general", "ai.example.marker", "", sep = "\r")
+    expect_identical(lo$env$state[[key]],
+                     list(state = "parked", since = "2026-08-19"))
+    chat_set_state(lo, "general", "ai.example.marker",
+                   list(state = "active"))
+    expect_identical(lo$env$state[[key]], list(state = "active"))
+    # Distinct state_keys are distinct slots under one type.
+    chat_set_state(lo, "general", "ai.example.marker",
+                   list(state = "parked"), state_key = "alt")
+    expect_identical(lo$env$state[[key]], list(state = "active"))
+})
+
+# An adapter that cannot write state says so.
+local({
+    nothing <- structure(list(), class = c("chat_nothing", "chat_client"))
+    expect_error(chat_set_state(nothing, "c", "t", list()),
+                 "not supported by this adapter")
+    expect_error(chat_get_state(nothing, "c", "t"),
+                 "not supported by this adapter")
+})
+
+# ---- Fetching an attachment ----
+# The reference adapter's attachments are already on disk, so this is a
+# copy -- but it goes through the same verb a Matrix consumer calls,
+# which is what lets that consumer have one code path.
+local({
+    lo <- chat_loopback()
+    f <- tempfile(fileext = ".png")
+    writeBin(as.raw(1:32), f)
+    chat_send(lo, "general", "see this", files = f)
+    att <- chat_poll(lo)$messages[[1L]]$attachments[[1L]]
+
+    dest <- chat_download(lo, att)
+    expect_true(file.exists(dest))
+    expect_identical(readBin(dest, "raw", 32L), as.raw(1:32))
+    # The extension rides along, because a consumer handing the file to
+    # something that sniffs by extension should not have to rename it.
+    expect_true(grepl("[.]png$", dest))
+    # And an explicit destination is honoured.
+    d2 <- tempfile(fileext = ".png")
+    expect_identical(chat_download(lo, att, d2), d2)
+    expect_true(file.exists(d2))
+})
+
+# An attachment naming content that is not there fails loudly rather
+# than leaving the caller pointing at an empty path.
+local({
+    lo <- chat_loopback()
+    gone <- chat_attachment(id = "x", name = "gone.png",
+                            path = file.path(tempdir(), "nope.png"))
+    expect_error(chat_download(lo, gone), "no readable content")
+    expect_error(chat_download(lo, chat_attachment(id = "y")),
+                 "no readable content")
+})
+
+# An adapter that reports no inbound media says so.
+local({
+    nothing <- structure(list(), class = c("chat_nothing", "chat_client"))
+    expect_error(chat_download(nothing, chat_attachment(id = "x")),
+                 "not supported by this adapter")
+})
+
+# Reading state back is the other half of the same capability.
+local({
+    lo <- chat_loopback()
+    # State never written reads as NULL rather than erroring: "no marker
+    # here" is an ordinary answer, and a caller checking for one should
+    # not need a handler to get it.
+    expect_null(chat_get_state(lo, "general", "ai.example.marker"))
+    chat_set_state(lo, "general", "ai.example.marker",
+                   list(state = "parked", since = "2026-08-20"))
+    expect_identical(chat_get_state(lo, "general", "ai.example.marker"),
+                     list(state = "parked", since = "2026-08-20"))
+    # Keyed by channel, type and state_key alike, so neither a
+    # different room nor a different key sees this one.
+    expect_null(chat_get_state(lo, "other", "ai.example.marker"))
+    expect_null(chat_get_state(lo, "general", "ai.other.marker"))
+    expect_null(chat_get_state(lo, "general", "ai.example.marker",
+                               state_key = "alt"))
+    # A write replaces the whole content, and the read sees that.
+    chat_set_state(lo, "general", "ai.example.marker", list(state = "active"))
+    expect_identical(chat_get_state(lo, "general", "ai.example.marker"),
+                     list(state = "active"))
+})
+
 # An adapter that cannot create says so.
 local({
     nothing <- structure(list(), class = c("chat_nothing", "chat_client"))
