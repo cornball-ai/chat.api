@@ -47,8 +47,9 @@ supported.}
 
 \item{rich}{Adapter-native markup for the platforms that accept it,
 or NULL. Matrix takes an HTML fragment and sends it as
-\code{formatted_body}; adapters whose
-\code{chat_capabilities()} is empty ignore it.
+\code{formatted_body}, Telegram sends it with the HTML parse mode;
+adapters whose \code{chat_capabilities()$rich_markup} is empty
+ignore it.
 
 \code{text} is still required and still has to stand on its own. It
 is what a client that cannot render the markup shows, what a push

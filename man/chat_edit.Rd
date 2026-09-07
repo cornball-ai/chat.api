@@ -30,6 +30,12 @@ apply it.}
 \item{markup}{\code{"plain"} or \code{"markdown"}, as
 \code{\link{chat_send}}.}
 
+\item{rich}{Adapter-native markup for the replacement, as
+\code{\link{chat_send}}: an HTML fragment where
+\code{chat_capabilities()$rich_markup} says so, ignored where it is
+empty. \code{text} is still the whole replacement on its own, for
+the same reason it is on a send.}
+
 \item{kind}{Message kind, as \code{\link{chat_send}}. Must match what
 the message was sent as: Matrix carries the msgtype inside the
 replacement content, so editing an \code{m.notice} without saying so

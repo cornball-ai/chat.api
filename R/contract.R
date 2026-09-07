@@ -39,8 +39,9 @@ chat_poll <- function(client, since = NULL, timeout = NULL, ...) {
 #'   adapter-understood alternative (e.g. \code{"notice"}, \code{"emote"}).
 #' @param rich Adapter-native markup for the platforms that accept it,
 #'   or NULL. Matrix takes an HTML fragment and sends it as
-#'   \code{formatted_body}; adapters whose
-#'   \code{chat_capabilities()} is empty ignore it.
+#'   \code{formatted_body}, Telegram sends it with the HTML parse mode;
+#'   adapters whose \code{chat_capabilities()$rich_markup} is empty
+#'   ignore it.
 #'
 #'   \code{text} is still required and still has to stand on its own. It
 #'   is what a client that cannot render the markup shows, what a push
@@ -1024,6 +1025,11 @@ chat_relogin.default <- function(client, ...) {
 #'   apply it.
 #' @param markup \code{"plain"} or \code{"markdown"}, as
 #'   \code{\link{chat_send}}.
+#' @param rich Adapter-native markup for the replacement, as
+#'   \code{\link{chat_send}}: an HTML fragment where
+#'   \code{chat_capabilities()$rich_markup} says so, ignored where it is
+#'   empty. \code{text} is still the whole replacement on its own, for
+#'   the same reason it is on a send.
 #' @param kind Message kind, as \code{\link{chat_send}}. Must match what
 #'   the message was sent as: Matrix carries the msgtype inside the
 #'   replacement content, so editing an \code{m.notice} without saying so
