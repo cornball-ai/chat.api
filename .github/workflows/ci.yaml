@@ -46,13 +46,21 @@ jobs:
             R CMD INSTALL "$RUNNER_TEMP/$pkg"
           done
 
-      # mx.crypto needs a Rust toolchain to build from source, so it is
-      # Linux-only here, off the r2u binary rapt already has sources for.
-      # Its one test -- that matrix_crypto_init() binds the store before
-      # opening the account -- is conditional and does not run on macOS.
+      # The development crypto APIs come from drat after the upstream PR
+      # lands. Bypass rapt's older r2u binary and build the vendored sources
+      # with the Linux runner's Rust toolchain. Keep the existing platform
+      # split: macOS exercises the Matrix adapter without optional crypto.
       - name: Install mx.crypto (Linux)
         if: runner.os == 'Linux'
-        run: Rscript -e 'install.packages("mx.crypto")'
+        run: |
+          Rscript -e '
+            if (isTRUE(getOption("rapt.enabled"))) rapt::disable()
+            utils::install.packages("mx.crypto",
+                             repos = "https://cornball-ai.github.io/drat",
+                             type = "source", dependencies = FALSE)
+            if (!requireNamespace("mx.crypto", quietly = TRUE) ||
+                utils::packageVersion("mx.crypto") < "0.2.1.1")
+              stop("CI needs mx.crypto >= 0.2.1.1; publish it to drat first")'
 
       # Fail loudly rather than letting the suite skip. mx.crypto is
       # reported but not required, since the macOS leg does without it.
