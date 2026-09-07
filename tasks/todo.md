@@ -12,7 +12,9 @@
       token + test channel.
 - [ ] Rewire corteza loop to chat_poll/chat_send; land corteza PR #155
       as the identity option
-- [ ] Telegram adapter (getUpdates; shape-identical to Matrix sync)
+- [x] Telegram adapter (getUpdates long poll, one offset cursor; every
+      verb seam-tested against Bot API shapes, httr formals pinned).
+      Live send/poll still needs a bot token.
 - [ ] CI (r-ci); decide public flip once the corteza rewire proves the
       contract
 

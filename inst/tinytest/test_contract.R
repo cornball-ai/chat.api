@@ -66,7 +66,7 @@ if (requireNamespace("mx.client", quietly = TRUE)) {
 # ignoring it, this is where that shows up.
 local({
     for (adapter in c("chat_loopback", "chat_irc", "chat_slack",
-                      "chat_matrix")) {
+                      "chat_matrix", "chat_telegram")) {
         m <- getS3method("chat_capabilities", adapter)
         caps <- m(structure(list(env = new.env()), class = adapter))
         for (flag in c("reactions", "reaction_events")) {
@@ -99,7 +99,7 @@ local({
 # omits gives a consumer NULL, and NULL is not FALSE.
 local({
     for (adapter in c("chat_loopback", "chat_irc", "chat_slack",
-                      "chat_matrix")) {
+                      "chat_matrix", "chat_telegram")) {
         m <- getS3method("chat_capabilities", adapter)
         caps <- m(structure(list(env = new.env()), class = adapter))
         for (flag in c("channel_info", "members")) {
@@ -135,7 +135,7 @@ local({
 # ---- Every adapter answers the invite pair ----
 local({
     for (adapter in c("chat_loopback", "chat_irc", "chat_slack",
-                      "chat_matrix")) {
+                      "chat_matrix", "chat_telegram")) {
         m <- getS3method("chat_capabilities", adapter)
         caps <- m(structure(list(env = new.env()), class = adapter))
         for (flag in c("invites", "join")) {
@@ -445,7 +445,7 @@ local({
 # another omits gives a consumer NULL, and NULL is not FALSE.
 local({
     for (adapter in c("chat_loopback", "chat_irc", "chat_slack",
-                      "chat_matrix")) {
+                      "chat_matrix", "chat_telegram")) {
         m <- getS3method("chat_capabilities", adapter)
         caps <- m(structure(list(env = new.env()), class = adapter))
         for (flag in c("channel_create", "leave", "files", "attachments")) {

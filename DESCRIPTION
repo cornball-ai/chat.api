@@ -10,7 +10,8 @@ Authors@R: c(
     person("cornball.ai", role = "cph"))
 Description: A transport-agnostic contract for chat-room connectivity:
     connect, poll, and send against one interface, with adapters for
-    'Matrix', 'Slack', Internet Relay Chat (IRC), and other platforms
+    'Matrix', 'Slack', 'Telegram', Internet Relay Chat (IRC), and other
+    platforms
     supplied by optional packages. The contract is the union of the
     parameters found across the R chat-client ecosystem, with per-adapter
     capability flags for threads, markup dialects, encryption, and

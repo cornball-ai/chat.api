@@ -12,6 +12,7 @@ adapters that wake up when their platform client is installed:
 | Matrix | `chat_matrix()` | mx.client (Suggests) | working |
 | IRC | `chat_irc()` | base R sockets | working |
 | Slack | `chat_slack()` | slackr (Suggests) | signature-verified, review-hardened; live roundtrip pending a workspace token |
+| Telegram | `chat_telegram()` | httr (Suggests) | every verb seam-tested against Bot API shapes; live roundtrip pending a bot token |
 
 ```r
 cl <- chat.api::chat_matrix(app = "mybot")
