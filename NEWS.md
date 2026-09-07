@@ -1,3 +1,15 @@
+# chat.api 0.0.1.27
+
+* New Telegram adapter, chat_telegram(), over the Bot API with HTTP
+  delegated to the suggested httr package. getUpdates long polling is
+  the poll, with a single update offset as the cursor. Sends render
+  markdown to Telegram HTML and carry threads, replies, files, and
+  silent delivery; edits, emoji reactions and reaction events, typing,
+  chat info, leaving, identity, @username addressing, and attachment
+  fetch through getFile are wired. Capabilities report what the Bot
+  API lacks: history, member and chat lists, read markers, joining,
+  and creating.
+
 # chat.api 0.0.1.26
 
 * Slack gains chat_channel_create() and chat_leave(), posting
