@@ -406,6 +406,59 @@ local({
     expect_true(caps$join)
 })
 
+# ---- Creating ----
+# conversations.create; Slack's answer names the channel, and that name
+# is the return value, since names are what every other verb in this
+# adapter takes. Adapter options (is_private) ride into the body.
+
+local({
+    seen <- NULL
+    cl <- slack_api_client(function(path, ..., body = NULL, .method, token) {
+        seen <<- list(path = path, body = body, .method = .method)
+        list(ok = TRUE, channel = list(id = "C9", name = "warroom"))
+    })
+    expect_identical(chat_channel_create(cl, "#warroom", is_private = TRUE),
+                     "warroom")
+    expect_identical(seen$path, "/api/conversations.create")
+    expect_identical(seen$.method, "POST")
+    expect_identical(seen$body$name, "warroom")
+    expect_true(seen$body$is_private)
+})
+
+# A refusal is an error, not a phantom channel: the caller must not walk
+# away with a name it believes is a room.
+expect_error(chat_channel_create(slack_api_client(function(...) {
+    list(ok = FALSE, error = "name_taken")
+}), "warroom"), "Slack refused conversations.create: name_taken")
+
+# ---- Leaving ----
+
+local({
+    seen <- NULL
+    cl <- slack_api_client(function(path, ..., body = NULL, .method, token) {
+        seen <<- list(path = path, body = body, .method = .method)
+        list(ok = TRUE)
+    })
+    expect_identical(chat_leave(cl, "#lab"), "lab")
+    expect_identical(seen$path, "/api/conversations.leave")
+    expect_identical(seen$.method, "POST")
+    expect_identical(seen$body$channel, "lab")
+})
+
+# A refusal propagates: a leave that quietly failed keeps delivering a
+# channel the caller believes it has left.
+expect_error(chat_leave(slack_api_client(function(...) {
+    list(ok = FALSE, error = "not_in_channel")
+}), "lab"), "Slack refused conversations.leave: not_in_channel")
+
+local({
+    caps <- chat_capabilities(chat_slack(channels = "lab", token = "t",
+                                         .history = function(...) NULL,
+                                         .post = function(...) "1"))
+    expect_true(caps$channel_create)
+    expect_true(caps$leave)
+})
+
 # ---- Identity ----
 slack_msg <- function(body = "", mentions = NULL) {
     chat_message(id = "1.1", channel = "lab", sender = "U999",

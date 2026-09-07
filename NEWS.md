@@ -1,3 +1,11 @@
+# chat.api 0.0.1.26
+
+* Slack gains chat_channel_create() and chat_leave(), posting
+  conversations.create and conversations.leave through the adapter's API
+  seam. Adapter options such as is_private = TRUE pass through to the
+  request body, and Slack's own refusals (name_taken, invalid_name,
+  not_in_channel) propagate as errors. Both capability flags are now TRUE.
+
 # chat.api 0.0.1.25
 
 * Matrix E2EE saves ratchet state before room-key request transport, retries
