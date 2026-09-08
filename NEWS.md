@@ -1,12 +1,15 @@
-# chat.api 0.0.1.27
+# chat.api 0.0.1.28
 
 * Slack gains user-token identity: chat_slack(user_token =) plus
   as_user = TRUE on chat_send() and chat_whoami() authenticate as an
   actual workspace member instead of the bot, so a send shows up under
   that member's real name and photo rather than the bot's profile.
   Distinct from identity/username, which only relabels the bot's own
-  post. Capability flag user_identity reports whether a given client
-  was configured with a user token.
+  post. Capability flag user_identity reports whether a given Slack
+  client was configured with a user token; every other adapter reports
+  FALSE.
+
+# chat.api 0.0.1.27
 
 * New Telegram adapter, chat_telegram(), over the Bot API with HTTP
   delegated to the suggested httr package. getUpdates long polling is
