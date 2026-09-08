@@ -6,6 +6,7 @@
 chat_slack(
   channels = character(),
   token = Sys.getenv("SLACK_TOKEN"),
+  user_token = Sys.getenv("SLACK_USER_TOKEN"),
   username = NULL,
   .history = NULL,
   .post = NULL,
@@ -18,6 +19,12 @@ chat_slack(
 
 \item{token}{Bot token; defaults to the \code{SLACK_TOKEN}
 environment variable.}
+
+\item{user_token}{User token (\code{xoxp-...}) for posting and
+resolving identity as a real workspace member rather than the bot;
+defaults to the \code{SLACK_USER_TOKEN} environment variable.
+Optional -- leave unset (empty string) if \code{as_user} is never
+used.}
 
 \item{username}{Default display-name override for sends, or NULL
 (default) to post as the bot's own identity.}
@@ -54,4 +61,13 @@ is only overridden through \code{username} here or
 \code{chat_send(identity =)} (both need the chat:write.customize
 scope).
 
+\code{user_token} is a different kind of authorship than
+\code{identity}: \code{identity}/\code{username} relabel a bot's own
+post with a cosmetic name and icon, while a user token
+(\code{xoxp-...}, obtained via a Slack app's User Token Scopes
+rather than its Bot Token Scopes) authenticates as an actual
+workspace member, so \code{chat_send(..., as_user = TRUE)} and
+\code{chat_whoami(..., as_user = TRUE)} post and resolve identity as
+that member -- Slack shows their real name and photo, not a bot
+profile. Optional: leave unset if you only ever post as the bot.
 }
