@@ -519,6 +519,94 @@ local({
 
 expect_true(chat_capabilities(slack_api_client(function(...) NULL))$whoami)
 
+# ---- User-token identity ----
+# as_user authenticates as an actual workspace member (a user token)
+# rather than relabeling the bot's own post (identity/username, which
+# stays a cosmetic override on the bot's send). The two are different
+# mechanisms and get separate tests.
+
+local({
+    cl <- chat_slack(channels = "lab", token = "xoxb-bot", user_token = "xoxp-user",
+                     .history = function(...) NULL, .post = function(...) "1")
+    expect_identical(cl$user_token, "xoxp-user")
+})
+
+# A user-token send authenticates as the member, so there is no bot
+# identity left to relabel: username/icon_emoji are not sent.
+local({
+    seen <- NULL
+    fake_post <- function(...) {
+        seen <<- list(...)
+        list(ok = TRUE, ts = "999.1")
+    }
+    cl <- chat_slack(channels = "lab", token = "xoxb-bot", user_token = "xoxp-user",
+                     .history = function(...) NULL, .post = fake_post)
+    ts <- chat_send(cl, "lab", "as me", as_user = TRUE, thread = "42.1")
+    expect_identical(ts, "999.1")
+    expect_identical(seen$token, "xoxp-user")
+    # Sent as empty strings rather than omitted: omitted, slackr fills
+    # them from SLACK_USERNAME/SLACK_ICON_EMOJI, exactly what the bot
+    # path suppresses the same way.
+    expect_identical(seen$username, "")
+    expect_identical(seen$icon_emoji, "")
+    # Threads ride the same parameter on either token.
+    expect_identical(seen$thread_ts, "42.1")
+})
+
+# Asking to post as a member this client was never given a user token
+# for is a configuration error, not a silent fall-back to the bot.
+local({
+    cl <- chat_slack(channels = "lab", token = "xoxb-bot",
+                     .history = function(...) NULL,
+                     .post = function(...) list(ok = TRUE, ts = "1"))
+    expect_error(chat_send(cl, "lab", "as me", as_user = TRUE), "user token")
+})
+
+# chat_whoami(as_user = TRUE) resolves the member's identity, cached
+# separately from the bot's -- a client can legitimately hold both.
+local({
+    calls <- 0L
+    api <- function(path, ..., .method, token) {
+        calls <<- calls + 1L
+        if (identical(token, "xoxp-user")) {
+            list(ok = TRUE, user_id = "U0HUMAN", user = "jorge")
+        } else {
+            list(ok = TRUE, user_id = "U0BOT", user = "little-j")
+        }
+    }
+    cl <- chat_slack(channels = "lab", token = "xoxb-bot", user_token = "xoxp-user",
+                     .history = function(...) NULL, .post = function(...) "1", .api = api)
+    bot <- chat_whoami(cl)
+    me <- chat_whoami(cl, as_user = TRUE)
+    expect_identical(bot$id, "U0BOT")
+    expect_identical(me$id, "U0HUMAN")
+    expect_identical(calls, 2L)
+    # Each identity is cached on its own slot: neither call repeats.
+    chat_whoami(cl)
+    chat_whoami(cl, as_user = TRUE)
+    expect_identical(calls, 2L)
+})
+
+# chat_whoami(as_user = TRUE) on a client with no user token is the
+# same configuration error as the send path.
+local({
+    cl <- chat_slack(channels = "lab", token = "xoxb-bot",
+                     .history = function(...) NULL, .post = function(...) "1",
+                     .api = function(...) list(ok = TRUE, user_id = "U0BOT"))
+    expect_error(chat_whoami(cl, as_user = TRUE), "user token")
+})
+
+# The capability is a property of this instance's configuration, not a
+# static fact about the Slack adapter -- unlike every other flag here.
+local({
+    with_ut <- chat_slack(channels = "lab", token = "t", user_token = "xoxp-x",
+                          .history = function(...) NULL, .post = function(...) "1")
+    without_ut <- chat_slack(channels = "lab", token = "t", user_token = "",
+                             .history = function(...) NULL, .post = function(...) "1")
+    expect_true(chat_capabilities(with_ut)$user_identity)
+    expect_false(chat_capabilities(without_ut)$user_identity)
+})
+
 # ---- History paging ----
 local({
     seen <- NULL

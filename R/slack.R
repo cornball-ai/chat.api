@@ -27,9 +27,30 @@
 #' \code{chat_send(identity =)} (both need the chat:write.customize
 #' scope).
 #'
+#' \code{user_token} is a different kind of authorship than
+#' \code{identity}: \code{identity}/\code{username} relabel a bot's own
+#' post with a cosmetic name and icon, while a user token
+#' (\code{xoxp-...}, obtained via a Slack app's User Token Scopes
+#' rather than its Bot Token Scopes) authenticates as an actual
+#' workspace member, so \code{chat_send(..., as_user = TRUE)} and
+#' \code{chat_whoami(..., as_user = TRUE)} post and resolve identity as
+#' that member -- Slack shows their real name and photo, not a bot
+#' profile. Optional: leave unset if you only ever post as the bot.
+#'
+#' A post made \code{as_user = TRUE} is the member's own message in
+#' every respect, including to this client's own \code{\link{chat_poll}}:
+#' Slack messages carry no \code{self}, so nothing distinguishes it from
+#' something the member typed, and a consumer that replies to the
+#' member's traffic will reply to it.
+#'
 #' @param channels Character vector of channels to poll.
 #' @param token Bot token; defaults to the \code{SLACK_TOKEN}
 #'   environment variable.
+#' @param user_token User token (\code{xoxp-...}) for posting and
+#'   resolving identity as a real workspace member rather than the bot;
+#'   defaults to the \code{SLACK_USER_TOKEN} environment variable.
+#'   Optional -- leave unset (empty string) if \code{as_user} is never
+#'   used.
 #' @param username Default display-name override for sends, or NULL
 #'   (default) to post as the bot's own identity.
 #' @param .history Testing seam: replacement for
@@ -47,7 +68,9 @@
 #' @return A \code{chat_client} of class \code{chat_slack}.
 #' @export
 chat_slack <- function(channels = character(),
-                       token = Sys.getenv("SLACK_TOKEN"), username = NULL,
+                       token = Sys.getenv("SLACK_TOKEN"),
+                       user_token = Sys.getenv("SLACK_USER_TOKEN"),
+                       username = NULL,
                        .history = NULL, .post = NULL, .react = NULL,
                        .api = NULL) {
     if ((is.null(.history) || is.null(.post)) &&
@@ -61,7 +84,7 @@ chat_slack <- function(channels = character(),
     env <- new.env(parent = emptyenv())
     env$cursor <- list()
     structure(list(env = env, channels = sub("^#", "", channels),
-                   token = token, username = username,
+                   token = token, user_token = user_token, username = username,
                    history_fn = .history %||% slackr::slackr_history,
                    post_fn = .post %||% slackr::slackr_msg,
                    react_fn = .react, api_fn = .api),
@@ -176,25 +199,43 @@ chat_send.chat_slack <- function(client, channel, text,
                                  thread = NULL, reply_to = NULL,
                                  identity = NULL, files = NULL,
                                  kind = "message", notify = TRUE,
-                                 rich = NULL, ...) {
+                                 rich = NULL, as_user = FALSE, ...) {
     markup <- match.arg(markup)
-    name_override <- if (is.null(identity$name)) {
-        client$username
-    } else {
-        identity$name
+    if (isTRUE(as_user) && !nzchar(client$user_token %||% "")) {
+        stop("chat_send(as_user = TRUE) needs a user token ",
+             "(SLACK_USER_TOKEN).", call. = FALSE)
     }
-    # Empty strings suppress slackr's SLACK_USERNAME/SLACK_ICON_EMOJI
-    # env defaults (the same value an unset variable produces), so an
-    # ordinary send never silently inherits a customized identity
-    args <- list(txt = slack_render(text, markup),
-                 channel = sub("^#", "", channel),
-                 token = client$token,
-                 username = name_override %||% "",
-                 icon_emoji = if (is.null(identity$icon)) {
-            ""
+    # A user-token send authenticates as an actual member, so there is
+    # no bot identity left to relabel -- username/icon_emoji are a
+    # bot-only concept (chat:write.customize). They still go out as
+    # empty strings, for the same reason the bot path sends them:
+    # omitted, slackr fills them from SLACK_USERNAME/SLACK_ICON_EMOJI,
+    # and whether Slack ignores those on a user token is not something
+    # this adapter should have to know.
+    args <- if (isTRUE(as_user)) {
+        list(txt = slack_render(text, markup),
+             channel = sub("^#", "", channel),
+             token = client$user_token,
+             username = "", icon_emoji = "")
+    } else {
+        name_override <- if (is.null(identity$name)) {
+            client$username
         } else {
-            identity$icon
-        })
+            identity$name
+        }
+        # Empty strings suppress slackr's SLACK_USERNAME/SLACK_ICON_EMOJI
+        # env defaults (the same value an unset variable produces), so an
+        # ordinary send never silently inherits a customized identity
+        list(txt = slack_render(text, markup),
+             channel = sub("^#", "", channel),
+             token = client$token,
+             username = name_override %||% "",
+             icon_emoji = if (is.null(identity$icon)) {
+                 ""
+             } else {
+                 identity$icon
+             })
+    }
     if (identical(markup, "plain")) {
         # Rides slackr_msg's ... into the chat.postMessage body:
         # without it Slack styles *emphasis* even in "plain" text
@@ -419,24 +460,43 @@ chat_capabilities.chat_slack <- function(client, ...) {
          mark_read = TRUE, set_identity = TRUE, relogin = FALSE,
          channel_create = TRUE, leave = TRUE, set_state = FALSE,
          files = FALSE, attachments = FALSE, typing = FALSE, e2ee = FALSE,
-         identity_override = TRUE, rich_markup = character(),
+         identity_override = TRUE,
+         # Unlike every other flag here, this one is a property of the
+         # instance, not the adapter: whether as_user = TRUE will work
+         # depends on whether this client was built with a user_token,
+         # the same way a missing bot token already fails at
+         # construction rather than through a capability flag. It is
+         # surfaced here anyway because there is no construction-time
+         # failure to fail with -- a client is free to never use
+         # as_user, and unconfigured is a normal, valid state for it.
+         user_identity = nzchar(client$user_token %||% ""),
+         rich_markup = character(),
          markup_dialects = c("plain", "markdown"),
          max_message_bytes = 40000L)
 }
 
 #' @export
-chat_whoami.chat_slack <- function(client, ...) {
+chat_whoami.chat_slack <- function(client, as_user = FALSE, ...) {
     # Cached for the client's lifetime. Unlike Matrix, where the id is
     # already a field of the config in hand, Slack only answers this over
     # the network -- and chat_addressed() asks once per message. The
     # answer is a property of the token, which cannot change underneath a
     # client that was constructed with it.
-    if (!is.null(client$env$whoami)) {
-        return(client$env$whoami)
+    #
+    # A client can hold two identities now (bot token, user token), so
+    # each gets its own cache slot rather than sharing one.
+    cache_slot <- if (isTRUE(as_user)) "whoami_user" else "whoami"
+    if (!is.null(client$env[[cache_slot]])) {
+        return(client$env[[cache_slot]])
+    }
+    token <- if (isTRUE(as_user)) client$user_token else client$token
+    if (isTRUE(as_user) && !nzchar(token %||% "")) {
+        stop("chat_whoami(as_user = TRUE) needs a user token ",
+             "(SLACK_USER_TOKEN).", call. = FALSE)
     }
     api <- client$api_fn %||% slackr::call_slack_api
     body <- slack_body(api("/api/auth.test", .method = "GET",
-                           token = client$token))
+                           token = token))
     slack_stop_for_error(body, "auth.test")
     id <- body$user_id
     if (is.null(id) || !length(id) || !nzchar(as.character(id)[[1L]])) {
@@ -445,7 +505,7 @@ chat_whoami.chat_slack <- function(client, ...) {
     who <- chat_identity(as.character(id)[[1L]],
                          display = body$user %||% NA_character_,
                          raw = body)
-    client$env$whoami <- who
+    client$env[[cache_slot]] <- who
     who
 }
 

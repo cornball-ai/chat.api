@@ -457,6 +457,23 @@ local({
     }
 })
 
+# ---- Every adapter answers user_identity ----
+# Slack's is a property of the client instance (was it built with a
+# user token), which is why it is worth checking that the others say
+# FALSE rather than nothing: a consumer that reads NULL cannot tell
+# "this adapter has no such thing" from "this client was not given
+# one". The stub client here has no user_token, so Slack answers FALSE
+# too; its TRUE case is in test_slack.R.
+local({
+    for (adapter in c("chat_loopback", "chat_irc", "chat_slack",
+                      "chat_matrix", "chat_telegram")) {
+        m <- getS3method("chat_capabilities", adapter)
+        caps <- m(structure(list(env = new.env()), class = adapter))
+        expect_true("user_identity" %in% names(caps), info = adapter)
+        expect_false(caps$user_identity, info = adapter)
+    }
+})
+
 # ---- Attachment record ----
 att <- chat_attachment("mxc://ex/abc", name = "plot.png",
                        mime = "image/png", bytes = 1024L)

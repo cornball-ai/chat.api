@@ -573,7 +573,8 @@ chat_capabilities.chat_telegram <- function(client, ...) {
          mark_read = FALSE, set_identity = TRUE, relogin = FALSE,
          channel_create = FALSE, leave = TRUE, set_state = FALSE,
          files = TRUE, attachments = TRUE, typing = TRUE, e2ee = FALSE,
-         identity_override = FALSE, rich_markup = "html",
+         identity_override = FALSE, user_identity = FALSE,
+         rich_markup = "html",
          markup_dialects = c("plain", "markdown"),
          # 4096 characters after entities parsing. Characters, not
          # bytes, so a message of multibyte text hits it sooner than

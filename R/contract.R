@@ -126,8 +126,12 @@ chat_resolve <- function(client, name, ...) {
 #'   media comes back out of \code{\link{chat_poll}} as
 #'   \code{\link{chat_attachment}} records), \code{typing},
 #'   \code{e2ee}, \code{identity_override} (logicals),
-#'   \code{markup_dialects} (character), \code{max_message_bytes}
-#'   (integer or NA).
+#'   \code{user_identity} (a send can authenticate as a real member of
+#'   the platform rather than as the bot -- Slack's
+#'   \code{chat_send(as_user = TRUE)} with a user token; a property of
+#'   the client instance's configuration there, and FALSE everywhere
+#'   else), \code{markup_dialects} (character),
+#'   \code{max_message_bytes} (integer or NA).
 #'
 #'   Sending and receiving get separate flags wherever a platform does
 #'   one and not the other, which is why \code{threads} and
