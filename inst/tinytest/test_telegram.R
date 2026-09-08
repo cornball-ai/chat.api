@@ -718,11 +718,17 @@ tg_fake_bot <- function(answer, file_url = NULL) {
 }
 
 # Something that is not a TGBot is refused at construction, not at the
-# first call.
-expect_error(chat_telegram(token = "t", bot = list(token = "t")),
+# first call. Seams supplied, so this is the bot check and not the
+# httr check that would otherwise come first on a box without httr
+# (CI has none of the suggested packages).
+tg_seams <- list(.api = function(...) NULL,
+                 .download = function(...) NULL)
+expect_error(do.call(chat_telegram, c(list(token = "t", bot = list(token = "t")),
+                                      tg_seams)),
              "req\\(method, body\\)")
 # And no token with no bot is the same error as before.
-expect_error(chat_telegram(token = ""), "TELEGRAM_BOT_TOKEN")
+expect_error(do.call(chat_telegram, c(list(token = ""), tg_seams)),
+             "TELEGRAM_BOT_TOKEN")
 
 if (requireNamespace("httr", quietly = TRUE)) {
     # Wire form reaches req() as its body: strings, NULLs dropped.
