@@ -26,5 +26,6 @@ Suggests:
     mx.client (>= 0.2.0.8),
     mx.crypto (>= 0.2.1.1),
     slackr,
+    telegram,
     tinytest
 Encoding: UTF-8

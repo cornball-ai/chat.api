@@ -34,7 +34,8 @@ if (requireNamespace("httr", quietly = TRUE)) {
 # ---- Seams ----
 # A client that needs neither httr nor the network. The download seam
 # defaults to a no-op that reports the destination it was handed.
-tg_client <- function(api, download = function(file_path, dest) dest, ...) {
+tg_client <- function(api, download = function(file_id, file_path, dest) dest,
+                      ...) {
     chat_telegram(token = "123:fake", .api = api, .download = download, ...)
 }
 
@@ -337,14 +338,16 @@ local({
         list(ok = TRUE, result = list(file_id = params$file_id,
                                       file_path = "photos/file_1.jpg"))
     }))
-    cl <- tg_client(s$api, download = function(file_path, dest) {
-        fetched <<- list(file_path = file_path, dest = dest)
+    cl <- tg_client(s$api, download = function(file_id, file_path, dest) {
+        fetched <<- list(file_id = file_id, file_path = file_path,
+                         dest = dest)
         writeBin(as.raw(1:4), dest)
         dest
     })
     att <- chat_attachment("big")
     dest <- chat_download(cl, att)
     expect_identical(s$calls()[[1L]]$params$file_id, "big")
+    expect_identical(fetched$file_id, "big")
     expect_identical(fetched$file_path, "photos/file_1.jpg")
     expect_identical(fetched$dest, dest)
     expect_true(grepl("[.]jpg$", dest))
@@ -664,6 +667,147 @@ local({
 expect_error(chat_set_identity(tg_client(function(...) {
     list(ok = FALSE, description = "Too Many Requests: retry after 3600")
 }), "x"), "Too Many Requests")
+
+# ---- Transport over a telegram::TGBot ----
+# Only the class's transport is borrowed: its public req() posts a body
+# to the method URL with the object's proxy applied and hands back the
+# httr response, which is what the direct layer builds for itself. Its
+# verbs are not used -- getUpdates() cannot long-poll or choose update
+# kinds, its parser flattens updates into data frames, and it has no
+# edit, reaction, chat or leave methods.
+
+# Drift detection against the real package. The bindings on a TGBot are
+# locked, so behavior is tested on a stand-in below; this pins the two
+# members the stand-in imitates.
+if (requireNamespace("telegram", quietly = TRUE)) {
+    b <- telegram::TGBot$new(token = "123:fake")
+    expect_true(is.function(b$req))
+    expect_identical(names(formals(b$req)), c("method", "body"))
+    expect_true(is.function(b$getFile))
+    expect_identical(names(formals(b$getFile)), c("file_id", "destfile"))
+    # A real TGBot builds a client with no token of its own.
+    cl <- chat_telegram(token = "", bot = b)
+    expect_true(inherits(cl, "chat_telegram"))
+    expect_identical(cl$bot, b)
+}
+
+# What req() hands back, as a seam would build it.
+tg_response <- function(json, status = 200L,
+                        type = "application/json") {
+    structure(list(url = "https://api.telegram.org/bot123:fake/x",
+                   status_code = as.integer(status),
+                   headers = list("content-type" = type),
+                   content = charToRaw(json)),
+              class = "response")
+}
+
+# A stand-in with the two members the adapter uses, recording calls.
+tg_fake_bot <- function(answer, file_url = NULL) {
+    calls <- list()
+    list(req = function(method, body = NULL) {
+             calls[[length(calls) + 1L]] <<- list(method = method, body = body)
+             if (is.function(answer)) answer(method, body) else answer
+         },
+         getFile = function(file_id, destfile = NULL) {
+             calls[[length(calls) + 1L]] <<- list(method = "getFile*",
+                                                  file_id = file_id,
+                                                  destfile = destfile)
+             invisible(file_url)
+         },
+         calls = function() calls)
+}
+
+# Something that is not a TGBot is refused at construction, not at the
+# first call.
+expect_error(chat_telegram(token = "t", bot = list(token = "t")),
+             "req\\(method, body\\)")
+# And no token with no bot is the same error as before.
+expect_error(chat_telegram(token = ""), "TELEGRAM_BOT_TOKEN")
+
+if (requireNamespace("httr", quietly = TRUE)) {
+    # Wire form reaches req() as its body: strings, NULLs dropped.
+    local({
+        bot <- tg_fake_bot(function(method, body) {
+            if (identical(method, "getMe")) {
+                tg_response('{"ok":true,"result":{"id":999,"is_bot":true,"first_name":"Corteza","username":"corteza_bot"}}')
+            } else {
+                tg_response('{"ok":true,"result":{"message_id":77}}')
+            }
+        })
+        cl <- chat_telegram(token = "", bot = bot,
+                            .download = function(...) NULL)
+        who <- chat_whoami(cl)
+        expect_identical(who$id, "999")
+        expect_identical(bot$calls()[[1L]]$method, "getMe")
+        expect_identical(bot$calls()[[1L]]$body, list())
+        expect_identical(chat_send(cl, "5", "hi", notify = FALSE), "77")
+        sent <- bot$calls()[[2L]]
+        expect_identical(sent$method, "sendMessage")
+        expect_identical(sent$body, list(chat_id = "5",
+                                         disable_notification = "true",
+                                         text = "hi"))
+    })
+
+    # A file rides the body as an httr upload, next to the fields.
+    local({
+        f <- tempfile(fileext = ".png")
+        writeBin(as.raw(1:4), f)
+        bot <- tg_fake_bot(tg_response('{"ok":true,"result":{"message_id":8}}'))
+        cl <- chat_telegram(token = "", bot = bot,
+                            .download = function(...) NULL)
+        expect_identical(chat_send(cl, "5", "", files = f), "8")
+        body <- bot$calls()[[1L]]$body
+        expect_identical(body$chat_id, "5")
+        expect_true(inherits(body$document, "form_file"))
+        expect_identical(body$document$path, f)
+    })
+
+    # A refusal comes back through the response body with Telegram's
+    # description, whatever req() warned on the way.
+    local({
+        bot <- tg_fake_bot(tg_response(
+            '{"ok":false,"error_code":401,"description":"Unauthorized"}',
+            status = 401L))
+        cl <- chat_telegram(token = "", bot = bot,
+                            .download = function(...) NULL)
+        expect_error(chat_whoami(cl), "Telegram refused getMe: Unauthorized")
+    })
+    # A body that is not JSON at all is reported with its status.
+    local({
+        bot <- tg_fake_bot(tg_response("<html>bad gateway</html>",
+                                       status = 502L, type = "text/html"))
+        cl <- chat_telegram(token = "", bot = bot,
+                            .download = function(...) NULL)
+        expect_error(chat_whoami(cl), "answered HTTP 502 with no JSON body")
+    })
+
+    # Downloads: the token is private to the class, so the URL comes from
+    # its own getFile(), asked without a destfile. The fetch itself is
+    # seamed here; the URL it is handed is what matters.
+    local({
+        got <- NULL
+        bot <- tg_fake_bot(NULL,
+                           file_url = "https://api.telegram.org/file/bot123:fake/photos/x.jpg")
+        dl <- chat.api:::telegram_tgbot_download(bot, fetch = function(url, dest) {
+            got <<- list(url = url, dest = dest)
+            dest
+        })
+        d <- tempfile(fileext = ".jpg")
+        expect_identical(dl("big", "photos/x.jpg", d), d)
+        expect_identical(bot$calls()[[1L]]$file_id, "big")
+        expect_null(bot$calls()[[1L]]$destfile)
+        expect_identical(got$url,
+                         "https://api.telegram.org/file/bot123:fake/photos/x.jpg")
+        expect_identical(got$dest, d)
+    })
+    # The class answers NULL for a file the Bot API will not serve; that
+    # is an error here, as on the direct path.
+    local({
+        bot <- tg_fake_bot(NULL, file_url = NULL)
+        dl <- chat.api:::telegram_tgbot_download(bot, fetch = function(...) stop("not reached"))
+        expect_error(dl("big", "photos/x.jpg", tempfile()), "served no download URL")
+    })
+}
 
 # ---- Live, opt-in ----
 # A read-only round trip against the real API, only where a token is

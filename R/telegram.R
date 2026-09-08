@@ -1,6 +1,7 @@
 #' @title Telegram adapter
 #' @description chat.api methods for the Telegram Bot API, with HTTP
-#'   delegated to the suggested httr package. Receive is getUpdates
+#'   delegated to the suggested httr package, or to a
+#'   \code{telegram::TGBot} when one is supplied. Receive is getUpdates
 #'   long polling: one call returns every update Telegram is holding
 #'   for the bot across every chat it is in, so the cursor is a single
 #'   update offset rather than one per channel. Sends, edits,
@@ -16,7 +17,7 @@
 #' Create a Telegram chat client
 #'
 #' Requires the suggested \pkg{httr} package and a bot token from
-#' BotFather.
+#' BotFather, or a \code{telegram::TGBot} that carries one.
 #'
 #' Channels are chat identifiers as Telegram reports them -- a
 #' positive number for a private chat, a negative one for a group or
@@ -34,7 +35,17 @@
 #' @param timeout Long-poll wait in seconds, used by
 #'   \code{\link{chat_poll}} when it is given no \code{timeout}.
 #' @param api_url Base URL of the Bot API. The default is Telegram's;
-#'   a local Bot API server takes its own.
+#'   a local Bot API server takes its own. Ignored when \code{bot} is
+#'   given, since the class fixes the host.
+#' @param bot A \code{telegram::TGBot} from the suggested \pkg{telegram}
+#'   package, or NULL. When given, every request goes through its public
+#'   \code{req()} method, so its proxy settings apply and \code{token}
+#'   may be left empty: the object holds its own. The class's verbs are
+#'   not used, only its transport. Its \code{getUpdates()} can neither
+#'   long-poll nor choose update kinds, its parser flattens updates into
+#'   data frames, and it has no edit, reaction, chat or leave methods;
+#'   \code{req()} is what carries this adapter. Attachments are fetched
+#'   from the URL its \code{getFile()} returns.
 #' @param .api Testing seam: replacement for the HTTP layer, a
 #'   \code{function(method, params, files)} returning the parsed
 #'   response (\code{list(ok =, result =)}). \code{params} arrives
@@ -42,33 +53,49 @@
 #'   \code{"true"}/\code{"false"}, numbers as plain digits. Leave NULL
 #'   in production.
 #' @param .download Testing seam: replacement for the file fetch, a
-#'   \code{function(file_path, dest)} writing the bytes behind a
-#'   getFile path to \code{dest}. Leave NULL in production; when both
-#'   seams are supplied the httr package is not required.
+#'   \code{function(file_id, file_path, dest)} writing the bytes behind
+#'   a getFile answer to \code{dest}. Leave NULL in production; when
+#'   both seams are supplied neither httr nor a bot is required.
 #' @return A \code{chat_client} of class \code{chat_telegram}.
 #' @export
 chat_telegram <- function(token = Sys.getenv("TELEGRAM_BOT_TOKEN"),
                           timeout = 30L,
-                          api_url = "https://api.telegram.org", .api = NULL,
-                          .download = NULL) {
+                          api_url = "https://api.telegram.org", bot = NULL,
+                          .api = NULL, .download = NULL) {
+    has_bot <- !is.null(bot)
+    if (has_bot && !is.function(bot$req)) {
+        stop("chat_telegram(): `bot` must be a telegram::TGBot, or an ",
+             "object with a req(method, body) method.", call. = FALSE)
+    }
+    # httr carries both transports: it is the direct one, and it is what
+    # unwraps a TGBot's responses -- telegram imports it, so a TGBot never
+    # arrives without it.
     if ((is.null(.api) || is.null(.download)) &&
         !requireNamespace("httr", quietly = TRUE)) {
         stop("chat_telegram() requires the 'httr' package. ",
              "Install it first.", call. = FALSE)
     }
-    if (!is.character(token) || length(token) != 1L || !nzchar(token)) {
-        stop("chat_telegram() needs a bot token (TELEGRAM_BOT_TOKEN).",
-             call. = FALSE)
+    token <- as.character(token %||% "")[[1L]]
+    if (!has_bot && (is.na(token) || !nzchar(token))) {
+        stop("chat_telegram() needs a bot token (TELEGRAM_BOT_TOKEN) or ",
+             "a telegram::TGBot as `bot`.", call. = FALSE)
     }
     api_url <- sub("/+$", "", api_url)
     env <- new.env(parent = emptyenv())
     env$cursor <- NULL
     env$whoami <- NULL
     structure(list(env = env, token = token, timeout = as.integer(timeout),
-                   api_url = api_url,
-                   api_fn = .api %||% telegram_http(token, api_url),
-                   download_fn = .download %||%
-                   telegram_http_download(token, api_url)),
+                   api_url = api_url, bot = bot,
+                   api_fn = .api %||% if (has_bot) {
+                telegram_tgbot_api(bot)
+            } else {
+                telegram_http(token, api_url)
+            },
+                   download_fn = .download %||% if (has_bot) {
+                telegram_tgbot_download(bot)
+            } else {
+                telegram_http_download(token, api_url)
+            }),
               class = c("chat_telegram", "chat_client"))
 }
 
@@ -159,18 +186,41 @@ telegram_http <- function(token, api_url) {
         }
         resp <- httr::POST(url, body = body, encode = encode,
                            httr::timeout(wait + 30))
-        # Read the body whatever the status: Telegram says no with a
-        # 4xx that still carries {ok: false, description}, and the
-        # description is the part worth reporting.
-        parsed <- tryCatch(
-                           httr::content(resp, as = "parsed", type = "application/json"),
-                           error = function(e) NULL)
-        if (!is.list(parsed)) {
-            stop("chat.api: Telegram ", method, " answered HTTP ",
-                 httr::status_code(resp), " with no JSON body.",
-                 call. = FALSE)
+        telegram_parse(resp, method)
+    }
+}
+
+# Read the body whatever the status: Telegram says no with a 4xx that
+# still carries {ok: false, description}, and the description is the
+# part worth reporting.
+telegram_parse <- function(resp, method) {
+    parsed <- tryCatch(
+                       httr::content(resp, as = "parsed", type = "application/json"),
+                       error = function(e) NULL)
+    if (!is.list(parsed)) {
+        stop("chat.api: Telegram ", method, " answered HTTP ",
+             httr::status_code(resp), " with no JSON body.", call. = FALSE)
+    }
+    parsed
+}
+
+# The same layer over a telegram::TGBot. Its public req() is a POST of
+# a body to /bot<token>/<method> with the object's proxy applied, and
+# it hands back the httr response, which is exactly what the direct
+# layer builds for itself. It also runs httr::warn_for_status(), so a
+# refused call warns there and then errors in telegram_call() with
+# Telegram's description; both are kept, since the first is the
+# package's and the second is the one with the reason in it. There is
+# no request timeout on that path: a long poll waits as long as curl
+# does.
+telegram_tgbot_api <- function(bot) {
+    force(bot)
+    function(method, params = list(), files = NULL) {
+        body <- params
+        if (length(files)) {
+            body <- c(body, lapply(files, httr::upload_file))
         }
-        parsed
+        telegram_parse(bot$req(method, body = body), method)
     }
 }
 
@@ -179,15 +229,39 @@ telegram_http <- function(token, api_url) {
 telegram_http_download <- function(token, api_url) {
     force(token)
     force(api_url)
-    function(file_path, dest) {
-        url <- sprintf("%s/file/bot%s/%s", api_url, token, file_path)
-        resp <- httr::GET(url, httr::write_disk(dest, overwrite = TRUE))
-        if (!identical(httr::status_code(resp), 200L)) {
-            stop("chat.api: Telegram file fetch answered HTTP ",
-                 httr::status_code(resp), ".", call. = FALSE)
-        }
-        invisible(dest)
+    function(file_id, file_path, dest) {
+        telegram_fetch(sprintf("%s/file/bot%s/%s", api_url, token, file_path),
+                       dest)
     }
+}
+
+# Over a TGBot the token is private, so the download URL comes from the
+# class's own getFile(), called without a destfile: that is the one
+# thing it returns rather than downloads. It answers NULL rather than
+# raising for a file the Bot API will not serve, which is turned back
+# into the error the direct path raises. The class's own download would
+# have gone through curl without its proxy anyway, so nothing is lost
+# by fetching the URL here.
+telegram_tgbot_download <- function(bot, fetch = telegram_fetch) {
+    force(bot)
+    force(fetch)
+    function(file_id, file_path, dest) {
+        url <- bot$getFile(file_id)
+        if (!is.character(url) || length(url) != 1L || !nzchar(url)) {
+            stop("chat.api: Telegram getFile served no download URL for ",
+                 file_id, ".", call. = FALSE)
+        }
+        fetch(url, dest)
+    }
+}
+
+telegram_fetch <- function(url, dest) {
+    resp <- httr::GET(url, httr::write_disk(dest, overwrite = TRUE))
+    if (!identical(httr::status_code(resp), 200L)) {
+        stop("chat.api: Telegram file fetch answered HTTP ",
+             httr::status_code(resp), ".", call. = FALSE)
+    }
+    invisible(dest)
 }
 
 # One place for the answer shape. A refused call is {ok: false,
@@ -658,6 +732,6 @@ chat_download.chat_telegram <- function(client, attachment, dest = NULL, ...) {
     }
     # Errors propagate, chat_react()'s reasoning: a fetch that quietly
     # failed leaves the caller pointing at a path with no bytes.
-    client$download_fn(path, dest)
+    client$download_fn(attachment$id, path, dest)
     invisible(dest)
 }
