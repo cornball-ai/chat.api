@@ -37,6 +37,12 @@
 #' that member -- Slack shows their real name and photo, not a bot
 #' profile. Optional: leave unset if you only ever post as the bot.
 #'
+#' A post made \code{as_user = TRUE} is the member's own message in
+#' every respect, including to this client's own \code{\link{chat_poll}}:
+#' Slack messages carry no \code{self}, so nothing distinguishes it from
+#' something the member typed, and a consumer that replies to the
+#' member's traffic will reply to it.
+#'
 #' @param channels Character vector of channels to poll.
 #' @param token Bot token; defaults to the \code{SLACK_TOKEN}
 #'   environment variable.
@@ -201,11 +207,16 @@ chat_send.chat_slack <- function(client, channel, text,
     }
     # A user-token send authenticates as an actual member, so there is
     # no bot identity left to relabel -- username/icon_emoji are a
-    # bot-only concept (chat:write.customize) and are not sent here.
+    # bot-only concept (chat:write.customize). They still go out as
+    # empty strings, for the same reason the bot path sends them:
+    # omitted, slackr fills them from SLACK_USERNAME/SLACK_ICON_EMOJI,
+    # and whether Slack ignores those on a user token is not something
+    # this adapter should have to know.
     args <- if (isTRUE(as_user)) {
         list(txt = slack_render(text, markup),
              channel = sub("^#", "", channel),
-             token = client$user_token)
+             token = client$user_token,
+             username = "", icon_emoji = "")
     } else {
         name_override <- if (is.null(identity$name)) {
             client$username

@@ -133,7 +133,8 @@ chat_capabilities.chat_irc <- function(client, ...) {
          # has no join verb yet, so neither flag can be TRUE honestly.
          channel_create = FALSE, leave = FALSE, set_state = FALSE,
          files = FALSE, attachments = FALSE, typing = FALSE, e2ee = FALSE,
-         identity_override = FALSE, rich_markup = character(),
+         identity_override = FALSE, user_identity = FALSE,
+         rich_markup = character(),
          markup_dialects = "plain", max_message_bytes = 400L)
 }
 

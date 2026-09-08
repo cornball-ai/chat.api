@@ -972,7 +972,7 @@ chat_capabilities.chat_matrix <- function(client, ...) {
          # unmentioned.
          attachments = matrix_media_capable(client),
          typing = TRUE, e2ee = isTRUE(client$e2ee),
-         identity_override = FALSE,
+         identity_override = FALSE, user_identity = FALSE,
          # Empty on an e2ee client: the Megolm path builds its own HTML
          # from markdown and has nowhere to put a supplied fragment.
          rich_markup = if (isTRUE(client$e2ee)) character() else "html",

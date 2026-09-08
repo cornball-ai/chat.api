@@ -70,4 +70,11 @@ workspace member, so \code{chat_send(..., as_user = TRUE)} and
 \code{chat_whoami(..., as_user = TRUE)} post and resolve identity as
 that member -- Slack shows their real name and photo, not a bot
 profile. Optional: leave unset if you only ever post as the bot.
+
+A post made \code{as_user = TRUE} is the member's own message in
+every respect, including to this client's own \code{\link{chat_poll}}:
+Slack messages carry no \code{self}, so nothing distinguishes it from
+something the member typed, and a consumer that replies to the
+member's traffic will reply to it.
+
 }

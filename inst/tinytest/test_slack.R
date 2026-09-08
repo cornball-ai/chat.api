@@ -541,11 +541,16 @@ local({
     }
     cl <- chat_slack(channels = "lab", token = "xoxb-bot", user_token = "xoxp-user",
                      .history = function(...) NULL, .post = fake_post)
-    ts <- chat_send(cl, "lab", "as me", as_user = TRUE)
+    ts <- chat_send(cl, "lab", "as me", as_user = TRUE, thread = "42.1")
     expect_identical(ts, "999.1")
     expect_identical(seen$token, "xoxp-user")
-    expect_false("username" %in% names(seen))
-    expect_false("icon_emoji" %in% names(seen))
+    # Sent as empty strings rather than omitted: omitted, slackr fills
+    # them from SLACK_USERNAME/SLACK_ICON_EMOJI, exactly what the bot
+    # path suppresses the same way.
+    expect_identical(seen$username, "")
+    expect_identical(seen$icon_emoji, "")
+    # Threads ride the same parameter on either token.
+    expect_identical(seen$thread_ts, "42.1")
 })
 
 # Asking to post as a member this client was never given a user token

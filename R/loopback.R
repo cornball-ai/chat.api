@@ -151,7 +151,8 @@ chat_capabilities.chat_loopback <- function(client, ...) {
          # them back out of the poll. Both TRUE is what makes loopback
          # the round-trip test double for media-carrying consumers.
          files = TRUE, attachments = TRUE, typing = FALSE, e2ee = FALSE,
-         identity_override = TRUE, rich_markup = character(),
+         identity_override = TRUE, user_identity = FALSE,
+         rich_markup = character(),
          markup_dialects = c("plain", "markdown"),
          max_message_bytes = NA_integer_)
 }
