@@ -740,9 +740,10 @@ expect_error(spec("C:relative"), "drive-relative")
 expect_identical(n("C:/relative"), "C:/relative")
 # ~ expands, and a relative path resolves against the caller's directory
 # rather than merging with an unrelated one of the same name.
-expect_true(startsWith(n("~/x"), "/"))
+expect_identical(n("~/x"), n(file.path(path.expand("~"), "x")))
 expect_identical(n("rel/x"), n(file.path(getwd(), "rel/x")))
-expect_true(startsWith(n("rel/x"), "/"))
+# Absolute paths may have a POSIX/UNC root or a Windows drive root.
+expect_true(grepl("^(/|[A-Za-z]:/)", n("rel/x")))
 # Directories that do exist still fold, which is the common case.
 local({
     d <- file.path(tempfile("specdir"), "s")
