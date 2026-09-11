@@ -9,7 +9,8 @@ All suggested packages and required versions are available from CRAN.
 ## Test environments
 
 * Ubuntu 24.04.5 LTS, x86_64, R 4.6.1.
-* Windows R-release and R-devel: pending win-builder checks.
+* Windows R-release and R-devel: uploaded to win-builder on 2026-09-11;
+  results pending.
 
 ## R CMD check results
 
