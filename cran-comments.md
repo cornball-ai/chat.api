@@ -9,8 +9,7 @@ All suggested packages and required versions are available from CRAN.
 ## Test environments
 
 * Ubuntu 24.04.5 LTS, x86_64, R 4.6.1.
-* Windows R-release: corrected source uploaded to win-builder on
-  2026-09-11; results pending.
+* Windows Server 2022 x64, R-release 4.6.1 (2026-06-24 ucrt), win-builder.
 * Windows Server 2022, R-devel (2026-09-10 r90519 ucrt): the first
   win-builder check found 3 Unix-specific test assertions. The tests now
   accept Windows absolute paths and check Unix file modes only on Unix.
@@ -20,7 +19,18 @@ All suggested packages and required versions are available from CRAN.
 
 Linux: 0 errors | 0 warnings | 1 note
 
+Windows R-release: 0 errors | 1 warning | 1 note
+
 The note is "New submission".
+
+The corrected Windows R-release run passed 1,403 assertions. Its warning
+reports a missing or unexported `mx.crypto::mxc_signing_key_public`.
+That function is exported by the CRAN source release mx.crypto 0.2.2;
+the Windows binary index still has 0.2.1. The 10 crypto assertions guarded
+by a newer mx.crypto version did not run. The published source archives
+for mx.api 0.3.1, mx.crypto 0.2.2, and mx.client 0.2.1 were uploaded to
+win-builder in dependency order before re-uploading the unchanged chat.api
+archive on 2026-09-11. That repeat check is pending.
 
 The Linux check used `--as-cran --run-donttest`, including PDF and HTML
 manual generation. All 1,414 tinytest assertions passed with all suggested
