@@ -7,6 +7,7 @@ chat_telegram(
   token = Sys.getenv("TELEGRAM_BOT_TOKEN"),
   timeout = 30L,
   api_url = "https://api.telegram.org",
+  bot = NULL,
   .api = NULL,
   .download = NULL
 )
@@ -19,7 +20,18 @@ environment variable.}
 \code{\link{chat_poll}} when it is given no \code{timeout}.}
 
 \item{api_url}{Base URL of the Bot API. The default is Telegram's;
-a local Bot API server takes its own.}
+a local Bot API server takes its own. Ignored when \code{bot} is
+given, since the class fixes the host.}
+
+\item{bot}{A \code{telegram::TGBot} from the suggested \pkg{telegram}
+package, or NULL. When given, every request goes through its public
+\code{req()} method, so its proxy settings apply and \code{token}
+may be left empty: the object holds its own. The class's verbs are
+not used, only its transport. Its \code{getUpdates()} can neither
+long-poll nor choose update kinds, its parser flattens updates into
+data frames, and it has no edit, reaction, chat or leave methods;
+\code{req()} is what carries this adapter. Attachments are fetched
+from the URL its \code{getFile()} returns.}
 
 \item{.api}{Testing seam: replacement for the HTTP layer, a
 \code{function(method, params, files)} returning the parsed
@@ -29,16 +41,16 @@ already in wire form: NULLs dropped, logicals as
 in production.}
 
 \item{.download}{Testing seam: replacement for the file fetch, a
-\code{function(file_path, dest)} writing the bytes behind a
-getFile path to \code{dest}. Leave NULL in production; when both
-seams are supplied the httr package is not required.}
+\code{function(file_id, file_path, dest)} writing the bytes behind
+a getFile answer to \code{dest}. Leave NULL in production; when
+both seams are supplied neither httr nor a bot is required.}
 }
 \value{
 A \code{chat_client} of class \code{chat_telegram}.
 }
 \description{
 Requires the suggested \pkg{httr} package and a bot token from
-BotFather.
+BotFather, or a \code{telegram::TGBot} that carries one.
 }
 \details{
 Channels are chat identifiers as Telegram reports them -- a

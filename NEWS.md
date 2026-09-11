@@ -1,3 +1,14 @@
+# chat.api 0.0.1.29
+
+* chat_telegram() accepts a telegram::TGBot as `bot`. Requests then go
+  through the class's public req(), so its proxy settings apply and the
+  token can stay inside the object; attachments are fetched from the
+  URL its getFile() returns. Only the transport is borrowed: the class's
+  own verbs cannot long-poll, choose update kinds, edit, react, or
+  leave, and its parser flattens updates into data frames. telegram
+  joins Suggests. The .download testing seam now takes
+  (file_id, file_path, dest).
+
 # chat.api 0.0.1.28
 
 * Slack gains user-token identity: chat_slack(user_token =) plus
