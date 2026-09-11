@@ -49,3 +49,8 @@ A list with at least: \code{threads} (can post into
 \description{
 Describe what a chat client's platform supports
 }
+\examples{
+caps <- chat_capabilities(chat_loopback())
+caps$threads
+caps$e2ee
+}

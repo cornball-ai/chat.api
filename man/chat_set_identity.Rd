@@ -31,3 +31,10 @@ rotation lands in the client that performed it, and nothing outside
 has to know it happened.
 
 }
+\examples{
+\dontrun{
+# Requires a saved Matrix configuration and account credentials.
+cl <- chat_matrix(app = "mybot")
+chat_set_identity(cl, "Example Bot")
+}
+}

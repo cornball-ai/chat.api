@@ -44,3 +44,7 @@ folding one into the other would make every consumer disambiguate by
 inspecting fields.
 
 }
+\examples{
+chat_reaction("r1", "general", "alice", target = "m1",
+              key = "+1", ts = as.POSIXct("2026-01-01", tz = "UTC"))
+}

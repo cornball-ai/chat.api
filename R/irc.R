@@ -16,6 +16,14 @@
 #'   \code{"#rstats"}).
 #' @param realname Real-name field for USER registration.
 #' @return A \code{chat_client} of class \code{chat_irc}.
+#' @examples
+#' \dontrun{
+#' # Requires a reachable IRC server and permission to join the channel.
+#' cl <- chat_irc(host = "irc.example.org", nick = "example_bot",
+#'                channels = "#example")
+#' chat_poll(cl, timeout = 1)
+#' chat_disconnect(cl)
+#' }
 #' @export
 chat_irc <- function(host, port = 6667L, nick, channels = character(),
                      realname = nick) {

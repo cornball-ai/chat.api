@@ -1,0 +1,67 @@
+## Submission
+
+This is the first submission of chat.api, version 0.1.0.
+
+The package provides a common chat interface with Matrix, IRC, Slack,
+Telegram, and in-memory adapters. It has no hard package dependencies.
+All suggested packages and required versions are available from CRAN.
+
+## Test environments
+
+* Ubuntu 24.04.5 LTS, x86_64, R 4.6.1.
+* Windows Server 2022 x64, R-release 4.6.1 (2026-06-24 ucrt), win-builder.
+* Windows Server 2022 x64, R-devel (2026-09-10 r90519 ucrt), win-builder.
+
+## R CMD check results
+
+Linux: 0 errors | 0 warnings | 1 note
+
+Windows R-release: 0 errors | 1 warning | 1 note
+
+Windows R-devel: 0 errors | 0 warnings | 1 note
+
+The note is "New submission".
+
+The corrected Windows R-devel check passed all 1,413 assertions,
+including the crypto pin-trust tests. Installation, examples, and PDF/HTML
+manual generation passed. One Unix file-permission assertion is skipped
+on Windows; the configuration roundtrip remains tested.
+
+The corrected Windows R-release run passed 1,403 assertions. Its warning
+reports a missing or unexported `mx.crypto::mxc_signing_key_public`.
+That function is exported by the CRAN source release mx.crypto 0.2.2;
+the Windows binary index had 0.2.1 when reviewed. The 10 crypto assertions
+guarded by a newer mx.crypto version did not run. The published source archives
+for mx.api 0.3.1, mx.crypto 0.2.2, and mx.client 0.2.1 were uploaded to
+win-builder in dependency order before re-uploading the unchanged chat.api
+archive on 2026-09-11. The repeat check still reported the same warning
+and passed 1,403 assertions. The dependency check results are needed to
+verify their installation outcomes before repeating the R-release check.
+
+The Linux check used `--as-cran --run-donttest`, including PDF and HTML
+manual generation. All 1,414 tinytest assertions passed with all suggested
+packages installed: mx.api 0.3.1, mx.client 0.2.1, mx.crypto 0.2.2,
+slackr 3.3.1, telegram 0.7.1, httr 1.4.9, and tinytest 1.4.3.
+With all optional platform packages absent, 1,039 assertions passed;
+tests requiring mx.client's session constructor are guarded explicitly.
+
+## Examples and tests
+
+Runnable examples use the in-memory adapter or temporary configuration
+files. The following examples use `\dontrun{}` because they require
+external services or account credentials:
+
+* chat_matrix, chat_react, chat_join, chat_leave, chat_channel_info,
+  chat_members, chat_pending, chat_set_identity, and chat_relogin require
+  saved Matrix credentials and a homeserver connection; room operations
+  also require access to the target room.
+* chat_matrix_configure requires a real homeserver and account password.
+* chat_slack requires a Slack token and access to a workspace channel.
+* chat_telegram requires a Telegram bot token and access to a target chat.
+* chat_irc requires a reachable IRC server and permission to join a channel.
+
+Automated checks use simulated transports. The optional live Telegram
+test is guarded by `tinytest::at_home()` and requires a bot token.
+Test cache, data, and configuration directories are redirected into the
+session temporary directory. The Linux check created no new files in R's
+user cache, data, or configuration directories.

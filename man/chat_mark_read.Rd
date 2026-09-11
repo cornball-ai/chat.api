@@ -30,3 +30,8 @@ surface -- per-user, per-device, and absent entirely on some
 platforms -- and no consumer needs it yet.
 
 }
+\examples{
+cl <- chat_loopback()
+id <- chat_send(cl, "general", "hello")
+chat_mark_read(cl, "general", id) # FALSE: no read markers
+}

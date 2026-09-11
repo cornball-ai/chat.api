@@ -42,8 +42,10 @@ credentials.
 }
 \examples{
 \dontrun{
+# Requires a real homeserver, account password, and access to the room.
+pw <- Sys.getenv("MATRIX_PASSWORD")
 cfg <- chat_matrix_configure(server = "https://matrix.example.org",
                              user = "bot", password = pw,
-                             room = "#lab:example.org", app = "corteza")
+                             room = "#lab:example.org", app = "mybot")
 }
 }

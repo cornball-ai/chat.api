@@ -17,3 +17,7 @@ TRUE, invisibly.
 The default method is a no-op: HTTP-poll transports have nothing to
 close. Persistent-socket transports (IRC) override it.
 }
+\examples{
+cl <- chat_loopback()
+chat_disconnect(cl)
+}

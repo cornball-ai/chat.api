@@ -78,3 +78,10 @@ something the member typed, and a consumer that replies to the
 member's traffic will reply to it.
 
 }
+\examples{
+\dontrun{
+# Requires slackr, SLACK_TOKEN, and a channel the token can access.
+cl <- chat_slack(channels = "C0123456789")
+chat_send(cl, "C0123456789", "hello")
+}
+}

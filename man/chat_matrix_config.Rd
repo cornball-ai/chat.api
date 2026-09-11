@@ -33,9 +33,13 @@ owner. They pass through untouched and unvalidated.
 
 }
 \examples{
-\dontrun{
-cfg <- chat_matrix_config(app = "corteza",
-                          env_var = "CORTEZA_MATRIX_CONFIG")
-client <- chat_matrix(mx = cfg)
+if (requireNamespace("mx.client", quietly = TRUE)) {
+  path <- tempfile(fileext = ".json")
+  cfg <- chat_config(list(server = "https://matrix.example.org",
+                          token = "example-token",
+                          user_id = "@bot:example.org"))
+  chat_config_save(cfg, path = path)
+  chat_matrix_config(path = path)
+  unlink(path)
 }
 }

@@ -67,3 +67,9 @@ notifications almost always carry the text as first sent. So the
 first version has to stand on its own -- "working on it" is a fine
 thing to be paged with, a half-finished sentence is not.
 }
+\examples{
+cl <- chat_loopback()
+id <- chat_send(cl, "general", "Working on it")
+chat_edit(cl, "general", id, "Finished")
+chat_history(cl, "general")$messages
+}

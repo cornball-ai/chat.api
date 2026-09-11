@@ -35,3 +35,9 @@ state store that cannot be reached at all still errors, because
 that is a different fact.
 
 }
+\examples{
+cl <- chat_loopback()
+chat_get_state(cl, "general", "m.room.topic") # NULL until written
+chat_set_state(cl, "general", "m.room.topic", list(topic = "Planning"))
+chat_get_state(cl, "general", "m.room.topic")
+}

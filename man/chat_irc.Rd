@@ -26,3 +26,12 @@ persistent socket buffers into \code{\link{chat_poll}}: each poll
 drains available lines, answers server PINGs, and returns PRIVMSGs
 as normalized messages. The cursor is a message counter.
 }
+\examples{
+\dontrun{
+# Requires a reachable IRC server and permission to join the channel.
+cl <- chat_irc(host = "irc.example.org", nick = "example_bot",
+               channels = "#example")
+chat_poll(cl, timeout = 1)
+chat_disconnect(cl)
+}
+}

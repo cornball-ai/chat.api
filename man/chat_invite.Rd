@@ -31,3 +31,6 @@ an event at a moment, and Matrix's stripped invite state carries no
 reliable \code{origin_server_ts} to report. A field that could only
 ever be NA is worse than no field.
 }
+\examples{
+chat_invite("!room:example.org", inviter = "@alice:example.org")
+}

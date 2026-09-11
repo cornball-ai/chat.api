@@ -758,6 +758,7 @@ if (requireNamespace("httr", quietly = TRUE)) {
     local({
         f <- tempfile(fileext = ".png")
         writeBin(as.raw(1:4), f)
+        on.exit(unlink(f), add = TRUE)
         bot <- tg_fake_bot(tg_response('{"ok":true,"result":{"message_id":8}}'))
         cl <- chat_telegram(token = "", bot = bot,
                             .download = function(...) NULL)
@@ -765,7 +766,9 @@ if (requireNamespace("httr", quietly = TRUE)) {
         body <- bot$calls()[[1L]]$body
         expect_identical(body$chat_id, "5")
         expect_true(inherits(body$document, "form_file"))
-        expect_identical(body$document$path, f)
+        # Upload helpers may resolve aliases such as /var -> /private/var.
+        expect_identical(normalizePath(body$document$path, mustWork = TRUE),
+                         normalizePath(f, mustWork = TRUE))
     })
 
     # A refusal comes back through the response body with Telegram's

@@ -162,6 +162,13 @@
 #'   consumer needs whenever it drives mx.api directly (read receipts,
 #'   member lookups) because a relogin may have replaced the token this
 #'   poll cycle.
+#' @examples
+#' \dontrun{
+#' # Requires mx.client and saved Matrix credentials for this application.
+#' cl <- chat_matrix(app = "mybot")
+#' chat_capabilities(cl)
+#' chat_poll(cl, timeout = 0)
+#' }
 #' @export
 chat_matrix <- function(app = NULL, path = NULL, save_cursor = TRUE,
                         mx = NULL, relogin = TRUE, e2ee = FALSE,

@@ -1,9 +1,7 @@
-# Matrix adapter verification that needs nothing installed. Every client
-# here supplies mx plus all four seams, which is the configuration
-# chat_matrix() documents as running without mx.client, so these
-# assertions are the ones that must not disappear on a bare CI runner.
-# The half that pins the adapter to mx.client's real signatures lives in
-# test_matrix_mxclient.R, which announces its skip.
+# Matrix poll, send, and crypto routing tests use injected transports and
+# run without mx.client. Additional verbs validate a real mx.client session
+# before invoking their transport, so those cases require mx.client.
+# Signature checks live in test_matrix_mxclient.R, which announces its skip.
 
 # device_id is here because an Olm account belongs to a device: an e2ee
 # client refuses a config that cannot name one.
@@ -742,9 +740,10 @@ expect_error(spec("C:relative"), "drive-relative")
 expect_identical(n("C:/relative"), "C:/relative")
 # ~ expands, and a relative path resolves against the caller's directory
 # rather than merging with an unrelated one of the same name.
-expect_true(startsWith(n("~/x"), "/"))
+expect_identical(n("~/x"), n(file.path(path.expand("~"), "x")))
 expect_identical(n("rel/x"), n(file.path(getwd(), "rel/x")))
-expect_true(startsWith(n("rel/x"), "/"))
+# Absolute paths may have a POSIX/UNC root or a Windows drive root.
+expect_true(grepl("^(/|[A-Za-z]:/)", n("rel/x")))
 # Directories that do exist still fold, which is the common case.
 local({
     d <- file.path(tempfile("specdir"), "s")
@@ -1322,6 +1321,7 @@ rx_ev <- function(event_id, target = "$msg", key = "y",
 }
 
 # Sending goes through mx.api::mx_react, seamed here.
+if (requireNamespace("mx.client", quietly = TRUE))
 local({
     seen <- NULL
     cl <- seam_client(.react = function(session, room_id, event_id, key) {
@@ -1339,6 +1339,7 @@ local({
 
 # A failing react propagates. Unlike a typing indicator, a dropped
 # acknowledgement is one the sender believes it made.
+if (requireNamespace("mx.client", quietly = TRUE))
 expect_error(chat_react(seam_client(.react = function(...) stop("403")),
                         "!room:ex", "$msg", "y"), "403")
 
@@ -1468,6 +1469,7 @@ if (requireNamespace("mx.client", quietly = TRUE) &&
 }
 
 # ---- Joining ----
+if (requireNamespace("mx.client", quietly = TRUE))
 local({
     seen <- NULL
     cl <- seam_client(.join = function(session, room_id) {
@@ -1481,6 +1483,7 @@ local({
 # A failed join propagates. Silently doing nothing would leave the caller
 # believing it is in a room it will never hear a word from, which looks
 # exactly like an idle room.
+if (requireNamespace("mx.client", quietly = TRUE))
 expect_error(chat_join(seam_client(.join = function(...) stop("M_FORBIDDEN")),
                        "!a:ex"), "M_FORBIDDEN")
 
@@ -1492,6 +1495,7 @@ expect_error(chat_join(structure(list(), class = c("chat_nothing",
 # ---- Creating ----
 # The seam replaces mx.api::mx_room_create; adapter-specific options
 # (topic, visibility, invitees) ride through ... untouched.
+if (requireNamespace("mx.client", quietly = TRUE))
 local({
     seen <- NULL
     cl <- seam_client(.create = function(session, name, ...) {
@@ -1506,11 +1510,13 @@ local({
 
 # A failed creation propagates: the caller must not walk away with a
 # name it believes is a room.
+if (requireNamespace("mx.client", quietly = TRUE))
 expect_error(
     chat_channel_create(seam_client(.create = function(...) stop("M_LIMIT")),
                         "warroom"), "M_LIMIT")
 
 # ---- Leaving ----
+if (requireNamespace("mx.client", quietly = TRUE))
 local({
     seen <- NULL
     cl <- seam_client(.leave = function(session, room_id) {
@@ -1523,6 +1529,7 @@ local({
 
 # A failed leave propagates: doing nothing quietly keeps delivering a
 # room the caller believes it has left.
+if (requireNamespace("mx.client", quietly = TRUE))
 expect_error(chat_leave(seam_client(.leave = function(...) stop("M_UNKNOWN")),
                         "!a:ex"), "M_UNKNOWN")
 
@@ -1598,6 +1605,7 @@ local({
 })
 
 # ---- Fetching media ----
+if (requireNamespace("mx.client", quietly = TRUE))
 local({
     seen <- NULL
     cl <- seam_client(.download = function(session, mxc_url, dest) {
@@ -1609,6 +1617,7 @@ local({
                            url = "mxc://ex/abc",
                            raw = list(encrypted = FALSE))
     dest <- chat_download(cl, att)
+    on.exit(unlink(dest), add = TRUE)
     expect_identical(seen$url, "mxc://ex/abc")
     # The extension survives, so a consumer handing the file to
     # something that sniffs by extension does not have to rename it.
@@ -1702,6 +1711,7 @@ local({
 
 # A rich threaded reply is threaded too: that path bypasses
 # mx_send_text, so it builds the same relation itself.
+if (requireNamespace("mx.client", quietly = TRUE))
 local({
     seen <- NULL
     cl <- seam_client(.rich = function(session, channel, text, ...) {
@@ -1730,6 +1740,7 @@ local({
 # The seam replaces mx.api::mx_set_state. The default state_key is the
 # empty string, where most Matrix state lives, and it is passed by name
 # so a seam with the real signature receives it in the right slot.
+if (requireNamespace("mx.client", quietly = TRUE))
 local({
     seen <- NULL
     cl <- seam_client(.state = function(session, channel, type, content,
@@ -1751,6 +1762,7 @@ local({
 
 # A failed write propagates: doing nothing quietly leaves a marker the
 # caller believes is set and no reader will ever see.
+if (requireNamespace("mx.client", quietly = TRUE))
 expect_error(
     chat_set_state(seam_client(.state = function(...) stop("M_FORBIDDEN")),
                    "!a:ex", "ai.example.marker", list()),
@@ -1758,6 +1770,7 @@ expect_error(
 
 # Reading it back. mx_get_state() answers NULL for state that is not
 # set, which is the generic's contract, so nothing is absorbed here.
+if (requireNamespace("mx.client", quietly = TRUE))
 local({
     seen <- NULL
     cl <- seam_client(.get_state = function(session, channel, type,
@@ -1773,10 +1786,12 @@ local({
     chat_get_state(cl, "!a:ex", "ai.example.marker", state_key = "$root")
     expect_identical(seen$state_key, "$root")
 })
+if (requireNamespace("mx.client", quietly = TRUE))
 expect_null(chat_get_state(seam_client(.get_state = function(...) NULL),
                            "!a:ex", "ai.example.marker"))
 # An unreachable state store is a different fact from absent state, and
 # still errors.
+if (requireNamespace("mx.client", quietly = TRUE))
 expect_error(
     chat_get_state(seam_client(.get_state = function(...) stop("HTTP 502")),
                    "!a:ex", "ai.example.marker"), "HTTP 502")
@@ -1883,6 +1898,7 @@ local({
 expect_true(chat_capabilities(seam_client())$whoami)
 
 # ---- State: channels ----
+if (requireNamespace("mx.client", quietly = TRUE))
 local({
     cl <- seam_client(.channels = function(session) c("!a:ex", "!b:ex"))
     expect_identical(chat_channels(cl), c("!a:ex", "!b:ex"))
@@ -1902,6 +1918,7 @@ hev <- function(id, body = "hi", msgtype = "m.text", ts = 1700000000000,
          origin_server_ts = ts, content = content)
 }
 
+if (requireNamespace("mx.client", quietly = TRUE))
 local({
     seen <- NULL
     cl <- seam_client(.history = function(session, room_id, ...) {
@@ -1927,6 +1944,7 @@ local({
                                 numeric(1))) > 0))
 })
 
+if (requireNamespace("mx.client", quietly = TRUE))
 local({
     # The cursor is /messages' own `from` token, and it comes back out as
     # `end`. Not a message id: handing an event id to /messages does not
@@ -1947,6 +1965,7 @@ local({
 # No `end` means no more history. The spec omits it at the start of a
 # room, and that -- not an empty chunk -- is the stop signal: a window
 # can be all state events and still have conversation behind it.
+if (requireNamespace("mx.client", quietly = TRUE))
 local({
     cl <- seam_client(.history = function(...) {
         list(chunk = list(list(type = "m.room.member", event_id = "$m")))
@@ -1955,6 +1974,7 @@ local({
     expect_identical(res$messages, list())
     expect_null(res$cursor)
 })
+if (requireNamespace("mx.client", quietly = TRUE))
 local({
     cl <- seam_client(.history = function(...) {
         list(chunk = list(), end = "t9")
@@ -1964,6 +1984,7 @@ local({
     expect_identical(chat_history(cl, "!a:ex")$cursor, "t9")
 })
 
+if (requireNamespace("mx.client", quietly = TRUE))
 local({
     # A msgtype the contract has no word for is dropped, not renamed.
     # matrix_kind() answers "message" for anything, so an m.image would
@@ -1980,6 +2001,7 @@ expect_identical(chat.api:::matrix_kind_strict("m.image"), NA_character_)
 expect_identical(chat.api:::matrix_kind_strict("m.notice"), "notice")
 expect_identical(chat.api:::matrix_kind_strict(NULL), NA_character_)
 
+if (requireNamespace("mx.client", quietly = TRUE))
 local({
     # Non-message state events (joins, topic changes) are not history.
     cl <- seam_client(.history = function(...) {
@@ -1989,6 +2011,7 @@ local({
     expect_identical(length(chat_history(cl, "!a:ex")$messages), 1L)
 })
 
+if (requireNamespace("mx.client", quietly = TRUE))
 local({
     # self and mentions survive the trip, so a consumer can tell its own
     # backfilled traffic from everyone else's.
@@ -2002,6 +2025,7 @@ local({
 })
 
 # ---- State: pending ----
+if (requireNamespace("mx.client", quietly = TRUE))
 local({
     seen <- NULL
     cl <- seam_client(.pending = function(session, timeout = NULL, ...) {
@@ -2025,6 +2049,7 @@ local({
     expect_identical(p$invites[[1L]]$inviter, "@ann:ex")
 })
 
+if (requireNamespace("mx.client", quietly = TRUE))
 local({
     # Nothing pending is an empty list, not NULL: a consumer looping
     # over it should not have to test for both.
@@ -2033,6 +2058,7 @@ local({
 })
 
 # ---- State: mark read ----
+if (requireNamespace("mx.client", quietly = TRUE))
 local({
     seen <- NULL
     cl <- seam_client(.read = function(session, room_id, event_id, ...) {
@@ -2047,6 +2073,7 @@ local({
 # A failed receipt is FALSE, not a throw. Unlike a reaction, nobody is
 # waiting on a read marker -- it costs a human a little context about
 # what the bot has seen, and nothing more.
+if (requireNamespace("mx.client", quietly = TRUE))
 expect_false(chat_mark_read(seam_client(.read = function(...) stop("boom")),
                             "!a:ex", "$1"))
 # An adapter without one says nothing rather than failing, for the same
@@ -2085,6 +2112,7 @@ local({
 # A progress message: post once, then keep replacing it. The alternative
 # is narrating into the channel one message per tool call, which is how
 # a room gets unreadable.
+if (requireNamespace("mx.client", quietly = TRUE))
 local({
     seen <- NULL
     cl <- seam_client(.edit = function(session, room_id, body, msgtype = "m.text",
@@ -2108,6 +2136,7 @@ local({
 # Markdown renders into both copies. A formatted edit whose new_content
 # carried only plain text would show the markup on old clients and lose
 # it on new ones, which is exactly backwards.
+if (requireNamespace("mx.client", quietly = TRUE))
 local({
     seen <- NULL
     cl <- seam_client(.edit = function(session, room_id, body, msgtype = "m.text",
@@ -2122,6 +2151,7 @@ local({
     expect_identical(seen$format, "org.matrix.custom.html")
     expect_true(grepl("^\\* ", seen$formatted_body))
 })
+if (requireNamespace("mx.client", quietly = TRUE))
 local({
     # Plain markup sets no format at all, rather than an empty one.
     seen <- NULL
@@ -2167,6 +2197,7 @@ expect_error(chat_edit(structure(list(), class = c("chat_nothing",
 # cannot express. mx_markdown_to_html() escapes raw HTML -- correctly,
 # it is a conservative subset -- so <details> can only get into a room
 # this way.
+if (requireNamespace("mx.client", quietly = TRUE))
 local({
     seen <- NULL
     cl <- seam_client(.rich = function(session, room_id, body, msgtype = "m.text",
@@ -2199,6 +2230,7 @@ local({
 # An edit carries it too, and a supplied fragment beats one rendered
 # from markdown -- the caller has markup the renderer cannot express,
 # which is the only reason to pass one.
+if (requireNamespace("mx.client", quietly = TRUE))
 local({
     seen <- NULL
     cl <- seam_client(.edit = function(session, room_id, body, msgtype = "m.text",
@@ -2241,6 +2273,7 @@ expect_identical(chat_capabilities(seam_client())$rich_markup, "html")
 # assumed m.text would turn an m.notice into an ordinary message the
 # first time it fired -- and m.notice is what keeps a bot's own output
 # from triggering other bots.
+if (requireNamespace("mx.client", quietly = TRUE))
 local({
     seen <- NULL
     cl <- seam_client(.edit = function(session, room_id, body, msgtype = "m.text",
@@ -2252,6 +2285,7 @@ local({
     expect_identical(seen$msgtype, "m.notice")
     expect_identical(seen$extra$`m.new_content`$msgtype, "m.notice")
 })
+if (requireNamespace("mx.client", quietly = TRUE))
 local({
     # Default is unchanged.
     seen <- NULL

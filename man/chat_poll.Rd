@@ -25,3 +25,10 @@ getUpdates) map directly; persistent-socket transports (IRC) buffer
 into the poll. The cursor is opaque and adapter-specific; pass the
 returned cursor back as \code{since} on the next call.
 }
+\examples{
+cl <- chat_loopback()
+chat_send(cl, "general", "hello")
+batch <- chat_poll(cl)
+batch$messages
+chat_poll(cl, since = batch$cursor)$messages
+}

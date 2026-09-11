@@ -65,3 +65,11 @@ comes out as ordinary traffic. Passing the returned cursor back as
 \code{since} confirms it; Telegram re-sends anything unconfirmed.
 
 }
+\examples{
+\dontrun{
+# Requires httr, TELEGRAM_BOT_TOKEN, and access to the target chat.
+cl <- chat_telegram()
+chat_whoami(cl)
+chat_send(cl, "@example_channel", "hello")
+}
+}

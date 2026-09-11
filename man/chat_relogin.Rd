@@ -24,3 +24,10 @@ caller that gets FALSE, and the first means the next call will fail
 with a stale token.
 
 }
+\examples{
+\dontrun{
+# Requires a saved Matrix configuration with login credentials.
+cl <- chat_matrix(app = "mybot")
+chat_relogin(cl)
+}
+}

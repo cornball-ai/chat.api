@@ -21,5 +21,7 @@ The file path (character).
 Where a Matrix configuration lives
 }
 \examples{
-chat_matrix_config_path("demo")
+if (requireNamespace("mx.client", quietly = TRUE)) {
+  chat_matrix_config_path("demo")
+}
 }

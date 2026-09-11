@@ -17,6 +17,9 @@ if (requireNamespace("mx.crypto", quietly = TRUE) &&
     store <- tempfile("pin-store-")
     dir.create(store)
     on.exit(unlink(store, recursive = TRUE), add = TRUE)
+    # Fixed test-only pickle key: this fixture checks save/load and pin trust,
+    # independently of mx.client's platform-specific random-byte source.
+    writeBin(as.raw(seq_len(32L)), file.path(store, "pickle.key"))
     crypto <- list(store = store)
     mx <- list(user_id = "@bot:example.org")
     query <- function(client, user_ids, self_master_key) {
@@ -999,8 +1002,11 @@ local({
                        path = path)
     chat_config_save(cfg)
     expect_true(file.exists(path))
-    # 0600. The file holds an access token.
-    expect_identical(substr(as.character(file.mode(path)), 1L, 3L), "600")
+    # The token file must be 0600 on Unix. Windows file.mode() does not
+    # report Unix owner/group permissions or Windows access-control lists.
+    if (.Platform$OS.type == "unix") {
+        expect_identical(substr(as.character(file.mode(path)), 1L, 3L), "600")
+    }
 
     back <- chat_matrix_config(path = path)
     expect_inherits(back, "chat_config")

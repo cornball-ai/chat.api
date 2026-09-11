@@ -18,3 +18,6 @@ The adapter-native channel identifier (character).
 \description{
 Resolve a human channel name to its identifier
 }
+\examples{
+chat_resolve(chat_loopback(), "general")
+}

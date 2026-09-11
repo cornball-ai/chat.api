@@ -84,3 +84,7 @@ A list with class \code{chat_message}.
 \description{
 The record every adapter's \code{\link{chat_poll}} returns.
 }
+\examples{
+chat_message("m1", "general", "alice", "hello",
+             ts = as.POSIXct("2026-01-01", tz = "UTC"))
+}

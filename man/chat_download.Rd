@@ -12,7 +12,8 @@ chat_download(client, attachment, dest = NULL, ...)
 on a \code{\link{chat_message}}'s \code{attachments}.}
 
 \item{dest}{Destination path. NULL picks a temporary file, keeping
-the attachment's extension where it has one.}
+the attachment's extension where it has one. The caller should remove
+temporary downloads with \code{unlink()} when finished.}
 
 \item{...}{Adapter-specific options.}
 }
@@ -36,4 +37,14 @@ An attachment already on disk (\code{path} set, as the loopback
 adapter records) is copied rather than fetched, so a consumer needs
 one code path for both.
 
+}
+\examples{
+cl <- chat_loopback()
+src <- tempfile(fileext = ".txt")
+writeLines("hello", src)
+chat_send(cl, "general", "a file", files = src)
+attachment <- chat_poll(cl)$messages[[1L]]$attachments[[1L]]
+dest <- chat_download(cl, attachment)
+readLines(dest)
+unlink(c(src, dest))
 }

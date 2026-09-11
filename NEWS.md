@@ -1,52 +1,16 @@
-# chat.api 0.0.1.29
+# chat.api 0.1.0
 
-* chat_telegram() accepts a telegram::TGBot as `bot`. Requests then go
-  through the class's public req(), so its proxy settings apply and the
-  token can stay inside the object; attachments are fetched from the
-  URL its getFile() returns. Only the transport is borrowed: the class's
-  own verbs cannot long-poll, choose update kinds, edit, react, or
-  leave, and its parser flattens updates into data frames. telegram
-  joins Suggests. The .download testing seam now takes
-  (file_id, file_path, dest).
-
-# chat.api 0.0.1.28
-
-* Slack gains user-token identity: chat_slack(user_token =) plus
-  as_user = TRUE on chat_send() and chat_whoami() authenticate as an
-  actual workspace member instead of the bot, so a send shows up under
-  that member's real name and photo rather than the bot's profile.
-  Distinct from identity/username, which only relabels the bot's own
-  post. Capability flag user_identity reports whether a given Slack
-  client was configured with a user token; every other adapter reports
-  FALSE.
-
-# chat.api 0.0.1.27
-
-* New Telegram adapter, chat_telegram(), over the Bot API with HTTP
-  delegated to the suggested httr package. getUpdates long polling is
-  the poll, with a single update offset as the cursor. Sends render
-  markdown to Telegram HTML and carry threads, replies, files, and
-  silent delivery; edits, emoji reactions and reaction events, typing,
-  chat info, leaving, identity, @username addressing, and attachment
-  fetch through getFile are wired. Capabilities report what the Bot
-  API lacks: history, member and chat lists, read markers, joining,
-  and creating.
-
-# chat.api 0.0.1.26
-
-* Slack gains chat_channel_create() and chat_leave(), posting
-  conversations.create and conversations.leave through the adapter's API
-  seam. Adapter options such as is_private = TRUE pass through to the
-  request body, and Slack's own refusals (name_taken, invalid_name,
-  not_in_channel) propagate as errors. Both capability flags are now TRUE.
-
-# chat.api 0.0.1.25
-
-* Matrix E2EE saves ratchet state before room-key request transport, retries
-  unsent requests with their stable ids, and treats transport failures as
-  warnings so a decrypted sync batch is not lost or replayed.
-* Same-user forwarded-key recovery requires a cross-signing chain matching
-  the master key in the local crypto store. Missing or unreadable local keys
-  leave the user's devices untrusted for recovery.
-* Matrix E2EE now requires mx.client >= 0.2.0.8 and mx.crypto >= 0.2.1.1 for
-  durable request handling and local cross-signing key access.
+* First CRAN release.
+* A common interface for polling, sending, editing, reactions, attachments,
+  room membership, history, state, and identity, with capability flags for
+  adapter-specific support.
+* An in-memory loopback adapter for local development and testing, plus
+  adapters for Matrix, IRC, Slack, and Telegram.
+* Matrix supports encrypted messaging, durable room-key requests,
+  verification against local cross-signing keys, and credential persistence
+  through mx.client and mx.crypto.
+* Slack supports channel creation and leaving, bot identity customization,
+  and posting as a workspace member when configured with a user token.
+* Telegram supports long polling, threads, replies, files, edits, reactions,
+  and identity. Requests can use httr directly or a telegram::TGBot object
+  with its configured proxy.
