@@ -10,10 +10,7 @@ All suggested packages and required versions are available from CRAN.
 
 * Ubuntu 24.04.5 LTS, x86_64, R 4.6.1.
 * Windows Server 2022 x64, R-release 4.6.1 (2026-06-24 ucrt), win-builder.
-* Windows Server 2022, R-devel (2026-09-10 r90519 ucrt): the first
-  win-builder check found 3 Unix-specific test assertions. The tests now
-  accept Windows absolute paths and check Unix file modes only on Unix.
-  Corrected source was uploaded on 2026-09-11; results pending.
+* Windows Server 2022 x64, R-devel (2026-09-10 r90519 ucrt), win-builder.
 
 ## R CMD check results
 
@@ -21,13 +18,20 @@ Linux: 0 errors | 0 warnings | 1 note
 
 Windows R-release: 0 errors | 1 warning | 1 note
 
+Windows R-devel: 0 errors | 0 warnings | 1 note
+
 The note is "New submission".
+
+The corrected Windows R-devel check passed all 1,413 assertions,
+including the crypto pin-trust tests. Installation, examples, and PDF/HTML
+manual generation passed. One Unix file-permission assertion is skipped
+on Windows; the configuration roundtrip remains tested.
 
 The corrected Windows R-release run passed 1,403 assertions. Its warning
 reports a missing or unexported `mx.crypto::mxc_signing_key_public`.
 That function is exported by the CRAN source release mx.crypto 0.2.2;
-the Windows binary index still has 0.2.1. The 10 crypto assertions guarded
-by a newer mx.crypto version did not run. The published source archives
+the Windows binary index had 0.2.1 when reviewed. The 10 crypto assertions
+guarded by a newer mx.crypto version did not run. The published source archives
 for mx.api 0.3.1, mx.crypto 0.2.2, and mx.client 0.2.1 were uploaded to
 win-builder in dependency order before re-uploading the unchanged chat.api
 archive on 2026-09-11. That repeat check is pending.
