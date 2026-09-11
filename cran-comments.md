@@ -34,7 +34,9 @@ the Windows binary index had 0.2.1 when reviewed. The 10 crypto assertions
 guarded by a newer mx.crypto version did not run. The published source archives
 for mx.api 0.3.1, mx.crypto 0.2.2, and mx.client 0.2.1 were uploaded to
 win-builder in dependency order before re-uploading the unchanged chat.api
-archive on 2026-09-11. That repeat check is pending.
+archive on 2026-09-11. The repeat check still reported the same warning
+and passed 1,403 assertions. The dependency check results are needed to
+verify their installation outcomes before repeating the R-release check.
 
 The Linux check used `--as-cran --run-donttest`, including PDF and HTML
 manual generation. All 1,414 tinytest assertions passed with all suggested
