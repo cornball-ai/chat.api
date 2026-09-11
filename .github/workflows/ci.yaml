@@ -25,12 +25,15 @@ jobs:
         with:
           backend: RAPT
 
-      # Use CRAN directly so recently published Matrix versions do not
-      # depend on r2u's rebuild schedule. Include all adapter test packages.
+      # Use CRAN sources for Matrix so binary rebuilds cannot select older
+      # versions. Include all adapter test packages from CRAN as well.
       - name: Install CRAN dependencies
         run: |
           Rscript -e '
             if (isTRUE(getOption("rapt.enabled"))) rapt::disable()
+            remotes::install_cran(c("mx.api", "mx.crypto", "mx.client"),
+                                  repos = "https://cran.r-project.org",
+                                  type = "source", upgrade = "never")
             remotes::install_deps(".", dependencies = TRUE,
                                   repos = "https://cran.r-project.org",
                                   upgrade = "never")'
@@ -46,7 +49,7 @@ jobs:
             entries <- trimws(strsplit(suggests, ",", fixed = TRUE)[[1L]])
             for (entry in entries) {
               parts <- regmatches(entry, regexec(
-                "^([[:alnum:].]+)( \\(>= ([0-9.]+)\\))?$", entry))[[1L]]
+                "^([[:alnum:].]+)( [(]>= ([0-9.]+)[)])?$", entry))[[1L]]
               if (!length(parts)) stop("Unsupported Suggests entry: ", entry)
               pkg <- parts[[2L]]
               if (!requireNamespace(pkg, quietly = TRUE))
