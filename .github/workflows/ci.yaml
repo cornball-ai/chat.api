@@ -25,6 +25,10 @@ jobs:
         with:
           backend: RAPT
 
+      - name: Install Linux build prerequisites
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y --no-install-recommends libcurl4-openssl-dev
+
       # Use CRAN sources for Matrix so binary rebuilds cannot select older
       # versions. Include all adapter test packages from CRAN as well.
       - name: Install CRAN dependencies
