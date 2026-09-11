@@ -230,3 +230,11 @@ Wraps an \code{mx.client} client config (see
 mx.client config; with \code{save_cursor = TRUE} every poll persists
 it, so a restarted process resumes where it left off.
 }
+\examples{
+\dontrun{
+# Requires mx.client and saved Matrix credentials for this application.
+cl <- chat_matrix(app = "mybot")
+chat_capabilities(cl)
+chat_poll(cl, timeout = 0)
+}
+}

@@ -31,3 +31,7 @@ TRUE if the signal was sent, FALSE otherwise, invisibly.
 Capability-gated: the default method is a no-op so adapters without
 typing indicators need not implement it.
 }
+\examples{
+cl <- chat_loopback()
+chat_typing(cl, "general") # FALSE: loopback has no typing indicator
+}

@@ -16,6 +16,12 @@
 #' @param ... Adapter-specific options.
 #' @return A list with \code{messages} (list of \code{chat_message}) and
 #'   \code{cursor} (opaque, for the next \code{since}).
+#' @examples
+#' cl <- chat_loopback()
+#' chat_send(cl, "general", "hello")
+#' batch <- chat_poll(cl)
+#' batch$messages
+#' chat_poll(cl, since = batch$cursor)$messages
 #' @export
 chat_poll <- function(client, since = NULL, timeout = NULL, ...) {
     UseMethod("chat_poll")
@@ -63,6 +69,11 @@ chat_poll <- function(client, since = NULL, timeout = NULL, ...) {
 #'   with files returns the attachment ids followed by the text id.
 #'   Callers that track their own traffic by id must handle every
 #'   element, or an unclaimed event reads as somebody else's message.
+#' @examples
+#' cl <- chat_loopback()
+#' id <- chat_send(cl, "general", "hello", markup = "plain")
+#' chat_send(cl, "general", "a reply", thread = id)
+#' chat_poll(cl)$messages
 #' @export
 chat_send <- function(client, channel, text, markup = c("plain", "markdown"),
                       thread = NULL, reply_to = NULL, identity = NULL,
@@ -81,6 +92,9 @@ chat_send <- function(client, channel, text, markup = c("plain", "markdown"),
 #' @param on Logical.
 #' @param ... Adapter-specific options.
 #' @return TRUE if the signal was sent, FALSE otherwise, invisibly.
+#' @examples
+#' cl <- chat_loopback()
+#' chat_typing(cl, "general") # FALSE: loopback has no typing indicator
 #' @export
 chat_typing <- function(client, channel, on = TRUE, ...) {
     UseMethod("chat_typing")
@@ -97,6 +111,8 @@ chat_typing.default <- function(client, channel, on = TRUE, ...) {
 #' @param name Channel name, alias, or identifier.
 #' @param ... Adapter-specific options.
 #' @return The adapter-native channel identifier (character).
+#' @examples
+#' chat_resolve(chat_loopback(), "general")
 #' @export
 chat_resolve <- function(client, name, ...) {
     UseMethod("chat_resolve")
@@ -140,6 +156,10 @@ chat_resolve <- function(client, name, ...) {
 #'   else's through the history endpoint this adapter polls, so a
 #'   consumer reading a single flag would wait forever for events that
 #'   never arrive.
+#' @examples
+#' caps <- chat_capabilities(chat_loopback())
+#' caps$threads
+#' caps$e2ee
 #' @export
 chat_capabilities <- function(client, ...) {
     UseMethod("chat_capabilities")
@@ -170,6 +190,14 @@ chat_capabilities <- function(client, ...) {
 #' @param ... Adapter-specific options.
 #' @return The reaction's identifier where the platform gives it one
 #'   (Matrix), invisibly; \code{TRUE} where it does not (Slack).
+#' @examples
+#' \dontrun{
+#' # Requires a saved Matrix configuration and a joined room.
+#' cl <- chat_matrix(app = "mybot")
+#' room <- chat_resolve(cl, "#general:example.org")
+#' id <- chat_send(cl, room, "hello")
+#' chat_react(cl, room, id, "+1")
+#' }
 #' @export
 chat_react <- function(client, channel, message_id, key, ...) {
     UseMethod("chat_react")
@@ -198,6 +226,12 @@ chat_react.default <- function(client, channel, message_id, key, ...) {
 #'   \code{\link{chat_resolve}}.
 #' @param ... Adapter-specific options.
 #' @return The joined channel's identifier, invisibly.
+#' @examples
+#' \dontrun{
+#' # Requires a saved Matrix configuration and access to the room.
+#' cl <- chat_matrix(app = "mybot")
+#' chat_join(cl, "#general:example.org")
+#' }
 #' @export
 chat_join <- function(client, channel, ...) {
     UseMethod("chat_join")
@@ -250,6 +284,12 @@ chat_channel_create.default <- function(client, name, ...) {
 #' @param channel Channel/room identifier.
 #' @param ... Adapter-specific options.
 #' @return The left channel's identifier, invisibly.
+#' @examples
+#' \dontrun{
+#' # Requires a saved Matrix configuration and a joined room.
+#' cl <- chat_matrix(app = "mybot")
+#' chat_leave(cl, "#general:example.org")
+#' }
 #' @export
 chat_leave <- function(client, channel, ...) {
     UseMethod("chat_leave")
@@ -283,6 +323,8 @@ chat_leave.default <- function(client, channel, ...) {
 #' an event at a moment, and Matrix's stripped invite state carries no
 #' reliable \code{origin_server_ts} to report. A field that could only
 #' ever be NA is worse than no field.
+#' @examples
+#' chat_invite("!room:example.org", inviter = "@alice:example.org")
 #' @export
 chat_invite <- function(channel, inviter = NA_character_, raw = NULL) {
     stopifnot(is.character(channel))
@@ -324,6 +366,12 @@ print.chat_invite <- function(x, ...) {
 #' @return A list with \code{id}, \code{name}, and \code{topic}.
 #'   \code{id} is the channel as the platform addresses it; \code{name}
 #'   and \code{topic} are character or NULL.
+#' @examples
+#' \dontrun{
+#' # Requires a saved Matrix configuration and a joined room.
+#' cl <- chat_matrix(app = "mybot")
+#' chat_channel_info(cl, "#general:example.org")
+#' }
 #' @export
 chat_channel_info <- function(client, channel, ...) {
     UseMethod("chat_channel_info")
@@ -349,6 +397,12 @@ chat_channel_info.default <- function(client, channel, ...) {
 #'   has none; an adapter that cannot answer throws, so an empty room is
 #'   never confused with an unanswerable question. Check
 #'   \code{chat_capabilities()$members} first.
+#' @examples
+#' \dontrun{
+#' # Requires a saved Matrix configuration and a joined room.
+#' cl <- chat_matrix(app = "mybot")
+#' chat_members(cl, "#general:example.org")
+#' }
 #' @export
 chat_members <- function(client, channel, ...) {
     UseMethod("chat_members")
@@ -388,6 +442,9 @@ chat_members.default <- function(client, channel, ...) {
 #'   acknowledgement. NULL when the adapter cannot tell.
 #' @param raw The adapter's platform-native payload.
 #' @return A list with class \code{chat_reaction}.
+#' @examples
+#' chat_reaction("r1", "general", "alice", target = "m1",
+#'               key = "+1", ts = as.POSIXct("2026-01-01", tz = "UTC"))
 #' @export
 chat_reaction <- function(id, channel, sender, target, key, ts, self = NULL,
                           raw = NULL) {
@@ -414,6 +471,9 @@ print.chat_reaction <- function(x, ...) {
 #' @param client A \code{chat_client}.
 #' @param ... Adapter-specific options.
 #' @return TRUE, invisibly.
+#' @examples
+#' cl <- chat_loopback()
+#' chat_disconnect(cl)
 #' @export
 chat_disconnect <- function(client, ...) {
     UseMethod("chat_disconnect")
@@ -472,6 +532,9 @@ chat_disconnect.default <- function(client, ...) {
 #'   be tied to a verified device, so the identifier is the homeserver's
 #'   word rather than cryptographic fact.
 #' @return A list with class \code{chat_message}.
+#' @examples
+#' chat_message("m1", "general", "alice", "hello",
+#'              ts = as.POSIXct("2026-01-01", tz = "UTC"))
 #' @export
 chat_message <- function(id, channel, sender, body, ts, thread = NULL,
                          markup = "plain", kind = "message", self = NULL,
@@ -555,9 +618,19 @@ chat_attachment <- function(id, name = NA_character_, mime = NA_character_,
 #' @param attachment A \code{\link{chat_attachment}} record, as carried
 #'   on a \code{\link{chat_message}}'s \code{attachments}.
 #' @param dest Destination path. NULL picks a temporary file, keeping
-#'   the attachment's extension where it has one.
+#'   the attachment's extension where it has one. The caller should remove
+#'   temporary downloads with \code{unlink()} when finished.
 #' @param ... Adapter-specific options.
 #' @return The destination path, invisibly.
+#' @examples
+#' cl <- chat_loopback()
+#' src <- tempfile(fileext = ".txt")
+#' writeLines("hello", src)
+#' chat_send(cl, "general", "a file", files = src)
+#' attachment <- chat_poll(cl)$messages[[1L]]$attachments[[1L]]
+#' dest <- chat_download(cl, attachment)
+#' readLines(dest)
+#' unlink(c(src, dest))
 #' @export
 chat_download <- function(client, attachment, dest = NULL, ...) {
     UseMethod("chat_download")
@@ -840,6 +913,8 @@ chat_history.default <- function(client, channel, limit = 50L, cursor = NULL,
 #' @return A list with \code{invites}, a list of \code{\link{chat_invite}}.
 #' @examples
 #' \dontrun{
+#' # Requires a saved Matrix configuration and a homeserver connection.
+#' client <- chat_matrix(app = "mybot")
 #' pending <- chat_pending(client)
 #' for (iv in pending$invites) chat_join(client, iv$channel)
 #' }
@@ -872,6 +947,10 @@ chat_pending.default <- function(client, ...) {
 #' @param message_id The message to mark read, and everything before it.
 #' @param ... Adapter-specific options.
 #' @return TRUE if the marker was sent, FALSE otherwise, invisibly.
+#' @examples
+#' cl <- chat_loopback()
+#' id <- chat_send(cl, "general", "hello")
+#' chat_mark_read(cl, "general", id) # FALSE: no read markers
 #' @export
 chat_mark_read <- function(client, channel, message_id, ...) {
     UseMethod("chat_mark_read")
@@ -901,6 +980,12 @@ chat_mark_read.default <- function(client, channel, message_id, ...) {
 #' @param display New display name.
 #' @param ... Adapter-specific options.
 #' @return TRUE if the identity was changed, invisibly.
+#' @examples
+#' \dontrun{
+#' # Requires a saved Matrix configuration and account credentials.
+#' cl <- chat_matrix(app = "mybot")
+#' chat_set_identity(cl, "Example Bot")
+#' }
 #' @export
 chat_set_identity <- function(client, display, ...) {
     UseMethod("chat_set_identity")
@@ -937,6 +1022,10 @@ chat_set_identity.default <- function(client, display, ...) {
 #' @param ... Adapter-specific options.
 #' @return The state event's identifier where the platform gives one
 #'   (Matrix), invisibly; \code{TRUE} where it does not.
+#' @examples
+#' cl <- chat_loopback()
+#' chat_set_state(cl, "general", "m.room.topic", list(topic = "Planning"))
+#' chat_get_state(cl, "general", "m.room.topic")
 #' @export
 chat_set_state <- function(client, channel, type, content, state_key = "",
                            ...) {
@@ -972,6 +1061,11 @@ chat_set_state.default <- function(client, channel, type, content,
 #' @param ... Adapter-specific options.
 #' @return The stored content as a named list, or \code{NULL} when no
 #'   state is set for that \code{type}/\code{state_key} pair.
+#' @examples
+#' cl <- chat_loopback()
+#' chat_get_state(cl, "general", "m.room.topic") # NULL until written
+#' chat_set_state(cl, "general", "m.room.topic", list(topic = "Planning"))
+#' chat_get_state(cl, "general", "m.room.topic")
 #' @export
 chat_get_state <- function(client, channel, type, state_key = "", ...) {
     UseMethod("chat_get_state")
@@ -997,6 +1091,12 @@ chat_get_state.default <- function(client, channel, type, state_key = "", ...) {
 #' @param client A \code{chat_client}.
 #' @param ... Adapter-specific options.
 #' @return TRUE, invisibly.
+#' @examples
+#' \dontrun{
+#' # Requires a saved Matrix configuration with login credentials.
+#' cl <- chat_matrix(app = "mybot")
+#' chat_relogin(cl)
+#' }
 #' @export
 chat_relogin <- function(client, ...) {
     UseMethod("chat_relogin")
@@ -1049,6 +1149,11 @@ chat_relogin.default <- function(client, ...) {
 #' notifications almost always carry the text as first sent. So the
 #' first version has to stand on its own -- "working on it" is a fine
 #' thing to be paged with, a half-finished sentence is not.
+#' @examples
+#' cl <- chat_loopback()
+#' id <- chat_send(cl, "general", "Working on it")
+#' chat_edit(cl, "general", id, "Finished")
+#' chat_history(cl, "general")$messages
 #' @export
 chat_edit <- function(client, channel, message_id, text,
                       markup = c("plain", "markdown"), rich = NULL,

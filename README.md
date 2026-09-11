@@ -2,8 +2,8 @@
 
 Transport-agnostic chat contract for R agents. Zero dependencies.
 
-One interface — `chat_poll()`, `chat_send()`, `chat_typing()`,
-`chat_resolve()`, `chat_capabilities()`, `chat_disconnect()` — with
+One interface, including `chat_poll()`, `chat_send()`, `chat_typing()`,
+`chat_resolve()`, `chat_capabilities()`, and `chat_disconnect()`, with
 adapters that wake up when their platform client is installed:
 
 | Adapter | Constructor | Delegates to | Status |
@@ -12,7 +12,7 @@ adapters that wake up when their platform client is installed:
 | Matrix | `chat_matrix()` | mx.client (Suggests) | working |
 | IRC | `chat_irc()` | base R sockets | working |
 | Slack | `chat_slack()` | slackr (Suggests) | signature-verified, review-hardened; live roundtrip pending a workspace token |
-| Telegram | `chat_telegram()` | httr, or a telegram::TGBot (Suggests) | every verb seam-tested against Bot API shapes; live roundtrip pending a bot token |
+| Telegram | `chat_telegram()` | httr, or a telegram::TGBot (Suggests) | working; live roundtrip verified |
 
 ```r
 cl <- chat.api::chat_matrix(app = "mybot")

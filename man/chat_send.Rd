@@ -76,3 +76,9 @@ Character vector of the message ids this call created, in the
 \description{
 Send a message through a chat client
 }
+\examples{
+cl <- chat_loopback()
+id <- chat_send(cl, "general", "hello", markup = "plain")
+chat_send(cl, "general", "a reply", thread = id)
+chat_poll(cl)$messages
+}

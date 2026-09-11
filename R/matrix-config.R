@@ -27,10 +27,14 @@
 #'   overrides both.
 #' @return A list with class \code{chat_config}.
 #' @examples
-#' \dontrun{
-#' cfg <- chat_matrix_config(app = "corteza",
-#'                           env_var = "CORTEZA_MATRIX_CONFIG")
-#' client <- chat_matrix(mx = cfg)
+#' if (requireNamespace("mx.client", quietly = TRUE)) {
+#'   path <- tempfile(fileext = ".json")
+#'   cfg <- chat_config(list(server = "https://matrix.example.org",
+#'                           token = "example-token",
+#'                           user_id = "@bot:example.org"))
+#'   chat_config_save(cfg, path = path)
+#'   chat_matrix_config(path = path)
+#'   unlink(path)
 #' }
 #' @export
 chat_matrix_config <- function(app = NULL, path = NULL, env_var = NULL) {
@@ -92,7 +96,9 @@ print.chat_config <- function(x, ...) {
 #'   an application that needs to migrate an older file.
 #' @return The file path (character).
 #' @examples
-#' chat_matrix_config_path("demo")
+#' if (requireNamespace("mx.client", quietly = TRUE)) {
+#'   chat_matrix_config_path("demo")
+#' }
 #' @export
 chat_matrix_config_path <- function(app, env_var = NULL, legacy = FALSE) {
     matrix_require_client("chat_matrix_config_path")
@@ -116,9 +122,14 @@ chat_matrix_config_path <- function(app, env_var = NULL, legacy = FALSE) {
 #' @param path Override the file to write.
 #' @return The config, invisibly.
 #' @examples
-#' \dontrun{
-#' cfg$operators <- "@troy:example.org"
-#' chat_config_save(cfg)
+#' if (requireNamespace("mx.client", quietly = TRUE)) {
+#'   path <- tempfile(fileext = ".json")
+#'   cfg <- chat_config(list(server = "https://matrix.example.org",
+#'                           token = "example-token",
+#'                           user_id = "@bot:example.org"))
+#'   chat_config_save(cfg, path = path)
+#'   file.exists(path)
+#'   unlink(path)
 #' }
 #' @export
 chat_config_save <- function(config, app = NULL, path = NULL) {
@@ -168,9 +179,11 @@ unclass_config <- function(config) {
 #' @return A \code{\link{chat_config}}, invisibly.
 #' @examples
 #' \dontrun{
+#' # Requires a real homeserver, account password, and access to the room.
+#' pw <- Sys.getenv("MATRIX_PASSWORD")
 #' cfg <- chat_matrix_configure(server = "https://matrix.example.org",
 #'                              user = "bot", password = pw,
-#'                              room = "#lab:example.org", app = "corteza")
+#'                              room = "#lab:example.org", app = "mybot")
 #' }
 #' @export
 chat_matrix_configure <- function(server, user, password, room = NULL,

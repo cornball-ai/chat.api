@@ -21,3 +21,10 @@ client stops receiving the channel's traffic, on platforms where
 membership is a thing at all. Capability-gated: check
 \code{chat_capabilities()$leave}.
 }
+\examples{
+\dontrun{
+# Requires a saved Matrix configuration and a joined room.
+cl <- chat_matrix(app = "mybot")
+chat_leave(cl, "#general:example.org")
+}
+}

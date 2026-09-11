@@ -39,3 +39,8 @@ a state write that silently did nothing leaves the caller believing
 a marker is set that no reader will ever see.
 
 }
+\examples{
+cl <- chat_loopback()
+chat_set_state(cl, "general", "m.room.topic", list(topic = "Planning"))
+chat_get_state(cl, "general", "m.room.topic")
+}

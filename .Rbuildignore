@@ -1,4 +1,6 @@
 ^CLAUDE\.md$
+^AGENTS\.md$
+^cran-comments\.md$
 ^DESIGN\.md$
 ^tasks$
 ^\.git$

@@ -28,3 +28,10 @@ caller believing it is in a room it will never hear from. Check
 \code{chat_capabilities()$join}.
 
 }
+\examples{
+\dontrun{
+# Requires a saved Matrix configuration and access to the room.
+cl <- chat_matrix(app = "mybot")
+chat_join(cl, "#general:example.org")
+}
+}

@@ -39,3 +39,12 @@ can be the whole message. Check \code{chat_capabilities()$reactions}
 before calling on an unknown adapter.
 
 }
+\examples{
+\dontrun{
+# Requires a saved Matrix configuration and a joined room.
+cl <- chat_matrix(app = "mybot")
+room <- chat_resolve(cl, "#general:example.org")
+id <- chat_send(cl, room, "hello")
+chat_react(cl, room, id, "+1")
+}
+}

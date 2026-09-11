@@ -37,3 +37,10 @@ stay distinguishable. Check \code{chat_capabilities()$channel_info}
 first.
 
 }
+\examples{
+\dontrun{
+# Requires a saved Matrix configuration and a joined room.
+cl <- chat_matrix(app = "mybot")
+chat_channel_info(cl, "#general:example.org")
+}
+}

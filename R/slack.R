@@ -66,6 +66,12 @@
 #'   (\code{chat_channel_info()}, \code{chat_members()}). Leave NULL in
 #'   production.
 #' @return A \code{chat_client} of class \code{chat_slack}.
+#' @examples
+#' \dontrun{
+#' # Requires slackr, SLACK_TOKEN, and a channel the token can access.
+#' cl <- chat_slack(channels = "C0123456789")
+#' chat_send(cl, "C0123456789", "hello")
+#' }
 #' @export
 chat_slack <- function(channels = character(),
                        token = Sys.getenv("SLACK_TOKEN"),

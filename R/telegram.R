@@ -57,6 +57,13 @@
 #'   a getFile answer to \code{dest}. Leave NULL in production; when
 #'   both seams are supplied neither httr nor a bot is required.
 #' @return A \code{chat_client} of class \code{chat_telegram}.
+#' @examples
+#' \dontrun{
+#' # Requires httr, TELEGRAM_BOT_TOKEN, and access to the target chat.
+#' cl <- chat_telegram()
+#' chat_whoami(cl)
+#' chat_send(cl, "@example_channel", "hello")
+#' }
 #' @export
 chat_telegram <- function(token = Sys.getenv("TELEGRAM_BOT_TOKEN"),
                           timeout = 30L,

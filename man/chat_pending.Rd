@@ -29,6 +29,8 @@ replay every channel it is in.
 }
 \examples{
 \dontrun{
+# Requires a saved Matrix configuration and a homeserver connection.
+client <- chat_matrix(app = "mybot")
 pending <- chat_pending(client)
 for (iv in pending$invites) chat_join(client, iv$channel)
 }

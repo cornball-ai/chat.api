@@ -23,3 +23,10 @@ Separate from \code{\link{chat_channel_info}} because it is the
 expensive half: a member list is unbounded where a name and a topic
 are two short strings, and it goes stale on a different schedule.
 }
+\examples{
+\dontrun{
+# Requires a saved Matrix configuration and a joined room.
+cl <- chat_matrix(app = "mybot")
+chat_members(cl, "#general:example.org")
+}
+}
