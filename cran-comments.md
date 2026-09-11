@@ -9,11 +9,12 @@ All suggested packages and required versions are available from CRAN.
 ## Test environments
 
 * Ubuntu 24.04.5 LTS, x86_64, R 4.6.1.
-* Windows R-release: uploaded to win-builder on 2026-09-11; results pending.
+* Windows R-release: corrected source uploaded to win-builder on
+  2026-09-11; results pending.
 * Windows Server 2022, R-devel (2026-09-10 r90519 ucrt): the first
   win-builder check found 3 Unix-specific test assertions. The tests now
   accept Windows absolute paths and check Unix file modes only on Unix.
-  A corrected Windows check is pending.
+  Corrected source was uploaded on 2026-09-11; results pending.
 
 ## R CMD check results
 
