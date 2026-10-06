@@ -248,6 +248,28 @@ local({
     expect_identical(length(fc$log$handle), 1L)
 })
 
+# ---- the call outlives the client object ----
+# corteza builds a chat client per poll. The calls live on the identity's
+# interned crypto context, so a new client for the same identity polls
+# them on.
+local({
+    cr <- fake_crypto()
+    fc <- fake_calls()
+    peer_key <- jsonlite::base64_enc(as.raw(1:16))
+    first <- seam_client(list(), cr, fc)
+    call <- chat_call_join(first, "!room:ex")
+    second <- seam_client(list(wrap_sync(to_device = list(
+        key_event("@bob:ex:LAPTOP", peer_key, 2L)))), cr, fc)
+    chat_poll(second)
+    expect_identical(length(fc$log$handle), 1L)
+    expect_identical(chat_call_updates(call)$keys[[1L]]$identity, "@bob:ex:LAPTOP")
+    # And a third client sees it as already joined.
+    expect_error(chat_call_join(seam_client(list(), cr, fc), "!room:ex"),
+                 "already in the call")
+    chat_call_leave(seam_client(list(), cr, fc), call)
+    expect_true(chat_call_updates(call)$ended)
+})
+
 # ---- leaving ----
 local({
     cr <- fake_crypto()

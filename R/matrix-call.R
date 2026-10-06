@@ -59,12 +59,17 @@ chat_call_join.chat_matrix <- function(client, channel, intent = "voice",
         stop("chat_call_join() needs mx.client >= ", .MATRIX_CALLS_MIN,
              call. = FALSE)
     }
-    if (!is.null(client$env$calls[[channel]]) &&
-        !isTRUE(client$env$calls[[channel]]$changes$ended)) {
+    # The calls live on the identity's crypto context, not on this
+    # client object: a consumer that builds a client per poll (corteza
+    # does) keeps its calls, since the context is interned per identity
+    # and store. The keys a call holds are in that context's Olm
+    # sessions anyway.
+    crypto <- matrix_crypto_require(client)
+    if (!is.null(crypto$calls[[channel]]) &&
+        !isTRUE(crypto$calls[[channel]]$changes$ended)) {
         stop("already in the call in ", channel, "; chat_call_leave() it first",
              call. = FALSE)
     }
-    crypto <- matrix_crypto_require(client)
     mx_call <- client$call_ops$join(client$env$mx, crypto$account,
                                     crypto$sessions, channel, intent = intent,
                                     store_dir = crypto$store, connect = FALSE,
@@ -88,10 +93,10 @@ chat_call_join.chat_matrix <- function(client, channel, intent = "voice",
         })
     }
     class(call) <- "chat_call"
-    if (is.null(client$env$calls)) {
-        client$env$calls <- list()
+    if (is.null(crypto$calls)) {
+        crypto$calls <- list()
     }
-    client$env$calls[[channel]] <- call
+    crypto$calls[[channel]] <- call
     call
 }
 
@@ -104,7 +109,10 @@ chat_call_leave.chat_matrix <- function(client, call, ...) {
     call$mx$client <- client$env$mx
     client$call_ops$leave(call$mx)
     call$changes$ended <- TRUE
-    client$env$calls[[call$channel]] <- NULL
+    crypto <- matrix_crypto_require(client)
+    if (!is.null(crypto)) {
+        crypto$calls[[call$channel]] <- NULL
+    }
     invisible(call)
 }
 
@@ -114,8 +122,12 @@ chat_call_leave.chat_matrix <- function(client, call, ...) {
 # has already moved past, and the next poll retries what a call needs
 # (membership and keys are re-read from room state and resent).
 matrix_calls_sync <- function(client, sync, crypto) {
-    calls <- client$env$calls
-    if (!length(calls) || is.null(crypto)) {
+    if (is.null(crypto)) {
+        return(invisible(NULL))
+    }
+    calls <- crypto$calls
+    if (!length(calls)) {
+        crypto$to_device <- NULL
         return(invisible(NULL))
     }
     processed <- list(to_device = crypto$to_device %||% list())
