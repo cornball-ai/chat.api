@@ -558,6 +558,11 @@ matrix_crypto_decrypt <- function(crypto, sync, mx) {
         self_id = mx$user_id, devices = devices,
         self_device_id = mx$device_id)
     matrix_crypto_commit_key_requests(crypto, res, mx)
+    # The decrypted to-device events, for the calls this client is in
+    # (matrix_calls_sync): their peers' media keys arrive this way. Held
+    # on the context for this poll only; decrypting the sync a second
+    # time for them would advance the Olm ratchets twice.
+    crypto$to_device <- res$to_device
     res$events
 }
 
