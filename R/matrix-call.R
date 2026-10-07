@@ -169,8 +169,22 @@ matrix_calls_sync <- function(client, sync, crypto) {
         crypto$to_device <- NULL
         return(invisible(NULL))
     }
-    processed <- list(to_device = crypto$to_device %||% list())
+    processed <- list(to_device = crypto$to_device %||% list(),
+                      events = crypto$decrypted %||% list())
     crypto$to_device <- NULL
+    crypto$decrypted <- NULL
+    traffic <- crypto$call_traffic
+    crypto$call_traffic <- NULL
+    if (!is.null(traffic) &&
+        (length(traffic$raw) || length(traffic$decrypted) || traffic$room_keys > 0L)) {
+        message("chat.api call: to-device raw [",
+                paste(traffic$raw, collapse = ", "), "] decrypted [",
+                paste(traffic$decrypted, collapse = ", "), "]",
+                if (traffic$room_keys > 0L) {
+                    paste0("; ", traffic$room_keys, " call key event(s) in a room ",
+                           "timeline, which the call does not read")
+                })
+    }
     for (channel in names(calls)) {
         call <- calls[[channel]]
         if (isTRUE(call$changes$ended)) {

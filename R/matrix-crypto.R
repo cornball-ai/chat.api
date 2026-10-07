@@ -563,6 +563,21 @@ matrix_crypto_decrypt <- function(crypto, sync, mx) {
     # on the context for this poll only; decrypting the sync a second
     # time for them would advance the Olm ratchets twice.
     crypto$to_device <- res$to_device
+    # The decrypted room events too: FluffyChat sends its call key as a
+    # room event rather than to-device, and the call reads those from
+    # here once mx.client keeps a decrypted event's type and content.
+    crypto$decrypted <- res$events
+    # What arrived, by type, for the call diagnostics (matrix_calls_sync
+    # logs it while a call is on): the raw to-device events, the
+    # decrypted ones, and any call key sent as a room event instead.
+    crypto$call_traffic <- list(
+        raw = vapply(sync$to_device$events %||% list(),
+                     function(ev) as.character(ev$type %||% "?"), ""),
+        decrypted = vapply(res$to_device %||% list(),
+                           function(ev) as.character(ev$type %||% "?"), ""),
+        room_keys = sum(vapply(res$events %||% list(), function(ev) {
+            identical(ev$type, "io.element.call.encryption_keys")
+        }, logical(1))))
     res$events
 }
 
