@@ -575,9 +575,12 @@ matrix_crypto_decrypt <- function(crypto, sync, mx) {
                      function(ev) as.character(ev$type %||% "?"), ""),
         decrypted = vapply(res$to_device %||% list(),
                            function(ev) as.character(ev$type %||% "?"), ""),
-        room_keys = sum(vapply(res$events %||% list(), function(ev) {
-            identical(ev$type, "io.element.call.encryption_keys")
-        }, logical(1))))
+        # Decrypted room events that are not messages, as sender:type.
+        room = unlist(lapply(res$events %||% list(), function(ev) {
+            if (is.null(ev$msgtype) && is.character(ev$type)) {
+                paste0(ev$sender %||% "?", ":", ev$type)
+            }
+        })))
     res$events
 }
 
