@@ -577,6 +577,13 @@ chat_poll.chat_matrix <- function(client, since = NULL, timeout = NULL, ...) {
     # owning crypto here: corteza used to run its own decrypt off $raw and
     # concatenate the results itself.
     for (d in dec) {
+        # Only messages. mx.client hands back every decrypted room event
+        # (a call's key, a ring notification, a reaction), and those have
+        # no body; a chat_message with an empty body is what a consumer
+        # trips over.
+        if (!is.character(d$body) || length(d$body) != 1L) {
+            next
+        }
         ms <- d$ts %||% event_ts[[as.character(d$event_id)]]
         messages[[length(messages) + 1L]] <- chat_message(
             id = as.character(d$event_id),

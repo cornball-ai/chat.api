@@ -84,7 +84,8 @@ chat_call_join.chat_matrix <- function(client, channel, intent = "voice",
     call$media <- function() {
         list(url = mx_call$token$url, jwt = mx_call$token$jwt,
              identity = mx_call$identity,
-             key = list(key = mx_call$keys$key, index = mx_call$keys$index))
+             key = list(key = mx_call$keys$key, index = mx_call$keys$index),
+             shared_with = as.character(mx_call$keys$shared_with))
     }
     call$peers <- function() {
         lapply(names(mx_call$keys$peers), function(id) {
