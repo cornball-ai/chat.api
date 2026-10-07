@@ -248,6 +248,60 @@ local({
     expect_identical(length(fc$log$handle), 1L)
 })
 
+# ---- a poll reports the rooms where someone's call membership changed ----
+local({
+    cr <- fake_crypto()
+    fc <- fake_calls()
+    member <- function(sender, device, content = NULL) {
+        list(type = "org.matrix.msc3401.call.member", sender = sender,
+             state_key = sprintf("_%s_%s_m.call", sender, device),
+             origin_server_ts = as.numeric(Sys.time()) * 1000,
+             content = content %||% list(application = "m.call", call_id = "",
+                                         device_id = device,
+                                         focus_active = list(type = "livekit"),
+                                         foci_preferred = list(list(
+                                             type = "livekit",
+                                             livekit_service_url = "https://jwt.ex")),
+                                         expires = 14400000))
+    }
+    syncs <- list(
+        # Ann joins in one room; our own membership in another is not news.
+        {
+            s <- wrap_sync(events = list(member("@ann:ex", "PHONE")))
+            s$rooms$join[["!other:ex"]] <- list(timeline = list(events = list(
+                member("@bot:ex", "DEV1"))))
+            s
+        },
+        # Ann leaves (empty content), Bob joins in room state.
+        {
+            s <- wrap_sync(events = list(member("@ann:ex", "PHONE", content = list())))
+            s$rooms$join[["!room:ex"]]$state <- list(events = list(member("@bob:ex", "LAPTOP")))
+            s
+        },
+        # Nothing about calls.
+        wrap_sync(events = list(list(type = "m.room.message", sender = "@ann:ex",
+                                     content = list(body = "hi", msgtype = "m.text")))))
+    cl <- seam_client(syncs, cr, fc)
+    if (requireNamespace("mx.client", quietly = TRUE) &&
+        utils::packageVersion("mx.client") >= "0.2.1.1") {
+        res <- chat_poll(cl)
+        expect_identical(length(res$calls), 1L)
+        expect_identical(res$calls[[1L]]$channel, "!room:ex")
+        expect_identical(res$calls[[1L]]$members, "@ann:ex:PHONE")
+        expect_identical(res$calls[[1L]]$left, character())
+        expect_stdout(print(res$calls[[1L]]), "<chat_call_notice> !room:ex: in @ann:ex:PHONE")
+        res <- chat_poll(cl)
+        expect_identical(length(res$calls), 1L)
+        expect_identical(res$calls[[1L]]$members, "@bob:ex:LAPTOP")
+        expect_identical(res$calls[[1L]]$left, "@ann:ex")
+        res <- chat_poll(cl)
+        expect_identical(res$calls, list())
+    } else {
+        # Without mx.client's call API there are no notices, and no error.
+        expect_identical(chat_poll(cl)$calls, list())
+    }
+})
+
 # ---- the call outlives the client object ----
 # corteza builds a chat client per poll. The calls live on the identity's
 # interned crypto context, so a new client for the same identity polls

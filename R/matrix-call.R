@@ -116,6 +116,45 @@ chat_call_leave.chat_matrix <- function(client, call, ...) {
     invisible(call)
 }
 
+# The call-membership events this sync carries, as notices: for each
+# room where someone other than this client announced or withdrew a
+# call membership, who is in (by mx.client's reading of the events:
+# non-empty content, a LiveKit focus, not expired) and who left (an
+# empty membership). A notice says the room's call changed; the room's
+# full membership is the call's own business once joined
+# (chat_call_updates()). Nothing without mx.client's call API.
+matrix_call_notices <- function(client, sync) {
+    if (!matrix_calls_available(client$call_override)) {
+        return(list())
+    }
+    self <- client$env$mx$user_id
+    out <- list()
+    for (room_id in names(sync$rooms$join)) {
+        room <- sync$rooms$join[[room_id]]
+        evs <- c(room$state$events %||% list(), room$timeline$events %||% list())
+        evs <- Filter(function(ev) {
+            identical(ev$type, .MATRIX_CALL_MEMBER) &&
+                is.character(ev$sender) && !identical(ev$sender, self)
+        }, evs)
+        if (!length(evs)) {
+            next
+        }
+        members <- vapply(mx.client::mx_call_members(evs), function(m) m$identity, "")
+        left <- unique(unlist(lapply(evs, function(ev) {
+            if (!length(ev$content)) ev$sender
+        })))
+        out[[length(out) + 1L]] <- structure(
+            list(channel = room_id, members = unique(members),
+                 left = as.character(left %||% character())),
+            class = "chat_call_notice")
+    }
+    out
+}
+
+# The membership state event's type (MSC3401; the per-device form both
+# Element Call and FluffyChat write in 2026).
+.MATRIX_CALL_MEMBER <- "org.matrix.msc3401.call.member"
+
 # Advance every live call with this poll's sync. Runs after the sync
 # is decrypted and consumed; a failure here is reported, not thrown,
 # since throwing would lose the poll's messages for a sync the cursor

@@ -15,7 +15,14 @@
 #'   default.
 #' @param ... Adapter-specific options.
 #' @return A list with \code{messages} (list of \code{chat_message}) and
-#'   \code{cursor} (opaque, for the next \code{since}).
+#'   \code{cursor} (opaque, for the next \code{since}). An adapter with
+#'   the \code{calls} capability also returns \code{calls}: one notice
+#'   per channel where someone other than this client announced or
+#'   withdrew a call membership in this poll, each
+#'   \code{list(channel, members, left)} with \code{members} the
+#'   identities now in the call and \code{left} those who withdrew. A
+#'   consumer that joins calls on demand acts on these (see
+#'   \code{\link{chat_call_join}}).
 #' @examples
 #' cl <- chat_loopback()
 #' chat_send(cl, "general", "hello")
@@ -1290,5 +1297,14 @@ chat_call_updates <- function(call) {
 print.chat_call <- function(x, ...) {
     cat("<chat_call> ", x$channel, " as ", x$identity,
         if (isTRUE(x$changes$ended)) " (left)" else "", "\n", sep = "")
+    invisible(x)
+}
+
+#' @export
+print.chat_call_notice <- function(x, ...) {
+    cat("<chat_call_notice> ", x$channel, ": in ",
+        if (length(x$members)) paste(x$members, collapse = ", ") else "nobody",
+        if (length(x$left)) paste0("; left ", paste(x$left, collapse = ", ")),
+        "\n", sep = "")
     invisible(x)
 }

@@ -17,7 +17,14 @@ default.}
 }
 \value{
 A list with \code{messages} (list of \code{chat_message}) and
-  \code{cursor} (opaque, for the next \code{since}).
+  \code{cursor} (opaque, for the next \code{since}). An adapter with
+  the \code{calls} capability also returns \code{calls}: one notice
+  per channel where someone other than this client announced or
+  withdrew a call membership in this poll, each
+  \code{list(channel, members, left)} with \code{members} the
+  identities now in the call and \code{left} those who withdrew. A
+  consumer that joins calls on demand acts on these (see
+  \code{\link{chat_call_join}}).
 }
 \description{
 Poll-shaped everywhere: long-poll transports (Matrix /sync, Telegram

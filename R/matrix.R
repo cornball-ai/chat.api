@@ -670,6 +670,7 @@ chat_poll.chat_matrix <- function(client, since = NULL, timeout = NULL, ...) {
          first_run = isTRUE(res$first_run),
          reactions = matrix_reactions(client, res$sync, event_pos),
          invites = matrix_invites(client, res$sync),
+         calls = matrix_call_notices(client, res$sync),
          raw = res$sync)
 }
 
