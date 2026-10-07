@@ -1282,8 +1282,10 @@ chat_call_media <- function(call) {
 #'   (each \code{identity}, \code{key}, \code{index}); \code{own}, this
 #'   client's key when it changed (\code{key}, \code{index}), else
 #'   \code{NULL}; \code{members}, the members' identities when the
-#'   membership changed, else \code{NULL}; \code{ended}, \code{TRUE}
-#'   once the call has been left.
+#'   membership changed, else \code{NULL}; \code{shared_with}, the
+#'   identities this client's key has reached, when that set changed,
+#'   else \code{NULL}; \code{ended}, \code{TRUE} once the call has been
+#'   left.
 #' @export
 chat_call_updates <- function(call) {
     stopifnot(inherits(call, "chat_call"))

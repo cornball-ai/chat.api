@@ -191,6 +191,7 @@ matrix_calls_sync <- function(client, sync, crypto) {
         mx_call$client <- client$env$mx
         mx_call$sessions <- crypto$sessions
         own_before <- list(key = mx_call$keys$key, index = mx_call$keys$index)
+        shared_before <- mx_call$keys$shared_with
         res <- tryCatch(client$call_ops$handle(mx_call, sync,
                 processed = processed),
                         error = function(e) {
@@ -208,6 +209,11 @@ matrix_calls_sync <- function(client, sync, crypto) {
                 call$changes$keys[[length(call$changes$keys) + 1L]] <-
                 list(identity = id, key = p$key, index = p$index)
             }
+        }
+        # Who our key has reached (the to-device sends that succeeded),
+        # whenever that set changes: the other half of "can they hear us".
+        if (!identical(shared_before, mx_call$keys$shared_with)) {
+            call$changes$shared_with <- as.character(mx_call$keys$shared_with)
         }
         if (!identical(own_before$key, mx_call$keys$key) ||
             !identical(own_before$index, mx_call$keys$index)) {
