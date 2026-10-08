@@ -553,10 +553,21 @@ matrix_crypto_decrypt <- function(crypto, sync, mx) {
         NULL
     }
 
-    res <- mx.client::mx_crypto_process_sync(
-        crypto$account, crypto$sessions, sync, crypto$self_curve,
-        self_id = mx$user_id, devices = devices,
-        self_device_id = mx$device_id)
+    # While in a call, mx.client's warnings about dropped to-device
+    # events are reported as messages: a peer's media key that fails to
+    # decrypt is otherwise silent in a long-running bot, whose top level
+    # never returns to print deferred warnings.
+    res <- withCallingHandlers(
+        mx.client::mx_crypto_process_sync(
+            crypto$account, crypto$sessions, sync, crypto$self_curve,
+            self_id = mx$user_id, devices = devices,
+            self_device_id = mx$device_id),
+        warning = function(w) {
+            if (length(crypto$calls)) {
+                message("chat.api call: ", conditionMessage(w))
+                invokeRestart("muffleWarning")
+            }
+        })
     matrix_crypto_commit_key_requests(crypto, res, mx)
     # The decrypted to-device events, for the calls this client is in
     # (matrix_calls_sync): their peers' media keys arrive this way. Held
