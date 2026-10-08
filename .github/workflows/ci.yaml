@@ -29,14 +29,20 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get install -y --no-install-recommends libcurl4-openssl-dev
 
-      # Use CRAN sources for Matrix so binary rebuilds cannot select older
-      # versions. Include all adapter test packages from CRAN as well.
+      # Matrix from source so binary rebuilds cannot select older
+      # versions. The drat comes first: the call surface needs mx.client
+      # 0.2.1.1 (and its mx.api 0.3.1.1), which are released there and
+      # not yet on CRAN. available.packages() keeps the first repository
+      # that lists a package, so the drat's build wins while it is newer;
+      # once CRAN carries these versions the drat entry can go. Include
+      # all adapter test packages from CRAN as well.
       - name: Install CRAN dependencies
         run: |
           Rscript -e '
             if (isTRUE(getOption("rapt.enabled"))) rapt::disable()
             remotes::install_cran(c("mx.api", "mx.crypto", "mx.client"),
-                                  repos = "https://cran.r-project.org",
+                                  repos = c("https://cornball-ai.github.io/drat",
+                                            "https://cran.r-project.org"),
                                   type = "source", upgrade = "never")
             remotes::install_deps(".", dependencies = TRUE,
                                   repos = "https://cran.r-project.org",

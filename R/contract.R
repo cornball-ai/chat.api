@@ -15,7 +15,14 @@
 #'   default.
 #' @param ... Adapter-specific options.
 #' @return A list with \code{messages} (list of \code{chat_message}) and
-#'   \code{cursor} (opaque, for the next \code{since}).
+#'   \code{cursor} (opaque, for the next \code{since}). An adapter with
+#'   the \code{calls} capability also returns \code{calls}: one notice
+#'   per channel where someone other than this client announced or
+#'   withdrew a call membership in this poll, each
+#'   \code{list(channel, members, left)} with \code{members} the
+#'   identities now in the call and \code{left} those who withdrew. A
+#'   consumer that joins calls on demand acts on these (see
+#'   \code{\link{chat_call_join}}).
 #' @examples
 #' cl <- chat_loopback()
 #' chat_send(cl, "general", "hello")
@@ -141,7 +148,8 @@ chat_resolve <- function(client, name, ...) {
 #'   \code{chat_send(files =)} works), \code{attachments} (inbound:
 #'   media comes back out of \code{\link{chat_poll}} as
 #'   \code{\link{chat_attachment}} records), \code{typing},
-#'   \code{e2ee}, \code{identity_override} (logicals),
+#'   \code{e2ee}, \code{calls} (\code{\link{chat_call_join}} works),
+#'   \code{identity_override} (logicals),
 #'   \code{user_identity} (a send can authenticate as a real member of
 #'   the platform rather than as the bot -- Slack's
 #'   \code{chat_send(as_user = TRUE)} with a user token; a property of
@@ -1168,4 +1176,137 @@ chat_edit.default <- function(client, channel, message_id, text,
     stop("chat_edit() is not supported by this adapter (",
          paste(class(client), collapse = "/"),
          "). Check chat_capabilities()$edits.", call. = FALSE)
+}
+
+#' Join a channel's call
+#'
+#' Takes part in the channel's live call as this client's identity: the
+#' signaling side only. The client announces itself as a call member,
+#' obtains the media server's address and a token for it, and exchanges
+#' media keys with the other members as they come and go, for as long
+#' as the client keeps polling. The media itself (joining the media
+#' server, audio in and out) is the caller's, typically in another
+#' process: \code{\link{chat_call_media}} gives it what it needs, and
+#' \code{\link{chat_call_updates}} the keys that arrive later. Every
+#' \code{\link{chat_poll}} on the client advances its calls.
+#' Capability-gated: check \code{chat_capabilities()$calls}.
+#'
+#' On Matrix this is a MatrixRTC call (what Element Call and FluffyChat
+#' 2.10 join), over LiveKit, encrypted end to end with per-member keys
+#' sent over Olm; it needs an \code{e2ee} client.
+#'
+#' @param client A \code{chat_client}.
+#' @param channel Channel/room identifier.
+#' @param intent \code{"voice"} or \code{"video"}, what the membership
+#'   announces.
+#' @param ... Adapter-specific options. Matrix: \code{service_url}, the
+#'   media token service to use instead of discovering one.
+#' @return A \code{chat_call}: an environment the adapter keeps
+#'   advancing on every poll until \code{\link{chat_call_leave}}. Its
+#'   \code{channel} and \code{identity} are plain fields.
+#' @examples
+#' \dontrun{
+#' cl <- chat_matrix(app = "mybot", e2ee = TRUE)
+#' call <- chat_call_join(cl, "!room:example.org")
+#' chat_call_media(call)$url
+#' repeat {
+#'     chat_poll(cl, timeout = 1)
+#'     upd <- chat_call_updates(call)
+#'     for (k in upd$keys) message("key from ", k$identity)
+#' }
+#' }
+#' @export
+chat_call_join <- function(client, channel, intent = "voice", ...) {
+    UseMethod("chat_call_join")
+}
+
+#' @export
+chat_call_join.default <- function(client, channel, intent = "voice", ...) {
+    stop("chat_call_join() is not supported by this adapter (",
+         paste(class(client), collapse = "/"),
+         "). Check chat_capabilities()$calls.", call. = FALSE)
+}
+
+#' Leave a call
+#'
+#' Withdraws the membership \code{\link{chat_call_join}} announced and
+#' stops advancing the call. The media side, if the caller opened one,
+#' is the caller's to close.
+#'
+#' @param client The \code{chat_client} the call was joined on.
+#' @param call A \code{chat_call} from \code{\link{chat_call_join}}.
+#' @param ... Adapter-specific options.
+#' @return The call, invisibly.
+#' @export
+chat_call_leave <- function(client, call, ...) {
+    UseMethod("chat_call_leave")
+}
+
+#' @export
+chat_call_leave.default <- function(client, call, ...) {
+    stop("chat_call_leave() is not supported by this adapter (",
+         paste(class(client), collapse = "/"),
+         "). Check chat_capabilities()$calls.", call. = FALSE)
+}
+
+#' What a media client needs to join a call
+#'
+#' The media server's address, the token that admits this identity, the
+#' identity itself, and this client's current media key, as the adapter
+#' holds them now. Taken once when the media side starts; a key that
+#' rotates later arrives through \code{\link{chat_call_updates}}.
+#'
+#' @param call A \code{chat_call}.
+#' @return A list: \code{url}, \code{jwt}, \code{identity},
+#'   \code{key} (a list with \code{key}, raw bytes, and \code{index}),
+#'   and \code{peers}, a list of the other members' keys known so far,
+#'   each a list with \code{identity}, \code{key} and \code{index}.
+#' @export
+chat_call_media <- function(call) {
+    stopifnot(inherits(call, "chat_call"))
+    media <- call$media()
+    media$peers <- call$peers()
+    media
+}
+
+#' What changed in a call since the last look
+#'
+#' Keys and membership that arrived through the polls since this was
+#' last called, cleared on return. A media side in another process
+#' forwards them: a peer's key before that peer's audio can be heard,
+#' and this client's own key when it rotated (which it does when a
+#' member leaves), or what it publishes stops being decodable.
+#'
+#' @param call A \code{chat_call}.
+#' @return A list: \code{keys}, a list of the peers' keys received
+#'   (each \code{identity}, \code{key}, \code{index}); \code{own}, this
+#'   client's key when it changed (\code{key}, \code{index}), else
+#'   \code{NULL}; \code{members}, the members' identities when the
+#'   membership changed, else \code{NULL}; \code{shared_with}, the
+#'   identities this client's key has reached, when that set changed,
+#'   else \code{NULL}; \code{ended}, \code{TRUE} once the call has been
+#'   left.
+#' @export
+chat_call_updates <- function(call) {
+    stopifnot(inherits(call, "chat_call"))
+    out <- call$changes
+    call$changes <- list(keys = list(), own = NULL, members = NULL,
+                         ended = isTRUE(out$ended))
+    out
+}
+
+#' @export
+print.chat_call <- function(x, ...) {
+    cat("<chat_call> ", x$channel, " as ", x$identity,
+        if (isTRUE(x$changes$ended)) " (left)" else "", "\n", sep = "")
+    invisible(x)
+}
+
+#' @export
+print.chat_call_notice <- function(x, ...) {
+    cat("<chat_call_notice> ", x$channel, ": in ",
+        if (length(x$members)) paste(x$members, collapse = ", ") else "nobody",
+        if (length(x$left)) paste0("; left ", paste(x$left, collapse = ", ")),
+        "\n", sep = "")
+    invisible(x)
 }

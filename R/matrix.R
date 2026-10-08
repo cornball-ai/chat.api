@@ -153,6 +153,10 @@
 #'   the rich-send path. Leave NULL in production.
 #' @param .edit Testing seam: replacement for \code{mx.api::mx_send} on
 #'   the edit path. Leave NULL in production.
+#' @param .call Testing seam: a named list overriding any of the three
+#'   call operations -- \code{join}, \code{handle}, \code{leave}
+#'   (\code{mx.client::mx_call_join}, \code{mx_call_handle},
+#'   \code{mx_call_leave}). Leave NULL in production.
 #' @return A \code{chat_client} of class \code{chat_matrix}.
 #'   \code{\link{chat_poll}} on this class returns \code{first_run} and
 #'   \code{client} alongside \code{messages}, \code{cursor}, and
@@ -180,7 +184,7 @@ chat_matrix <- function(app = NULL, path = NULL, save_cursor = TRUE,
                         .get_state = NULL, .extract_media = NULL,
                         .download = NULL, .channels = NULL, .history = NULL,
                         .pending = NULL, .read = NULL, .identity = NULL,
-                        .edit = NULL, .rich = NULL) {
+                        .edit = NULL, .rich = NULL, .call = NULL) {
     seams <- list(.sync, .extract, .send, .media)
     if ((is.null(mx) || any(vapply(seams, is.null, logical(1)))) &&
         !requireNamespace("mx.client", quietly = TRUE)) {
@@ -242,7 +246,8 @@ chat_matrix <- function(app = NULL, path = NULL, save_cursor = TRUE,
                    pending_fn = .pending, read_fn = .read,
                    identity_fn = .identity, edit_fn = .edit,
                    rich_fn = .rich,
-                   crypto_ops = matrix_crypto_ops(.crypto)),
+                   crypto_ops = matrix_crypto_ops(.crypto),
+                   call_ops = matrix_call_ops(.call), call_override = .call),
               class = c("chat_matrix", "chat_client"))
 }
 
@@ -533,6 +538,12 @@ chat_poll.chat_matrix <- function(client, since = NULL, timeout = NULL, ...) {
         # Nothing above threw, so the sync is consumed and its cursor
         # becomes the live one.
         client$env$mx <- res$client
+        # The calls this client is in read the decrypted to-device
+        # events of this sync (their peers' media keys) and its
+        # membership changes. After the cursor: a call that cannot be
+        # advanced is reported and retried on the next poll, and must
+        # not cost the poll its messages.
+        matrix_calls_sync(client, res$sync, crypto)
     }
 
     event_ts <- matrix_event_times(res$sync)
@@ -566,6 +577,13 @@ chat_poll.chat_matrix <- function(client, since = NULL, timeout = NULL, ...) {
     # owning crypto here: corteza used to run its own decrypt off $raw and
     # concatenate the results itself.
     for (d in dec) {
+        # Only messages. mx.client hands back every decrypted room event
+        # (a call's key, a ring notification, a reaction), and those have
+        # no body; a chat_message with an empty body is what a consumer
+        # trips over.
+        if (!is.character(d$body) || length(d$body) != 1L) {
+            next
+        }
         ms <- d$ts %||% event_ts[[as.character(d$event_id)]]
         messages[[length(messages) + 1L]] <- chat_message(
             id = as.character(d$event_id),
@@ -659,6 +677,7 @@ chat_poll.chat_matrix <- function(client, since = NULL, timeout = NULL, ...) {
          first_run = isTRUE(res$first_run),
          reactions = matrix_reactions(client, res$sync, event_pos),
          invites = matrix_invites(client, res$sync),
+         calls = matrix_call_notices(client, res$sync),
          raw = res$sync)
 }
 
@@ -953,10 +972,10 @@ chat_capabilities.chat_matrix <- function(client, ...) {
     # that fails in exactly the rooms such a client exists for.
     list(threads = matrix_threads_available() && !isTRUE(client$e2ee),
          thread_replies = TRUE,
-         # Refused in encrypted rooms: an edit carries its replacement
-         # text in an ordinary event, and there is no Megolm path that
-         # can carry a relation. Same bargain as files.
-         edits = !isTRUE(client$e2ee),
+         # An edit works encrypted too: the Megolm path carries the
+         # relation and m.new_content inside the ciphertext, so the
+         # replacement text stays off the homeserver.
+         edits = TRUE,
          reactions = TRUE, reaction_events = matrix_reactions_available(),
          channel_info = TRUE, members = TRUE,
          invites = matrix_invites_available(), join = TRUE, whoami = TRUE,
@@ -979,6 +998,11 @@ chat_capabilities.chat_matrix <- function(client, ...) {
          # unmentioned.
          attachments = matrix_media_capable(client),
          typing = TRUE, e2ee = isTRUE(client$e2ee),
+         # A call's media keys travel over Olm, so only an e2ee client
+         # can take part, and only with an mx.client that speaks
+         # MatrixRTC.
+         calls = isTRUE(client$e2ee) &&
+         matrix_calls_available(client$call_override),
          identity_override = FALSE, user_identity = FALSE,
          # Empty on an e2ee client: the Megolm path builds its own HTML
          # from markdown and has nowhere to put a supplied fragment.
@@ -1168,39 +1192,19 @@ chat_edit.chat_matrix <- function(client, channel, message_id, text,
                                   markup = c("plain", "markdown"),
                                   rich = NULL, kind = "message", ...) {
     markup <- match.arg(markup)
-    # Refused in encrypted rooms, and chat_capabilities() reports
-    # edits = FALSE on an e2ee client to match -- the same bargain
-    # attachments get.
-    #
-    # An edit is an ordinary m.room.message carrying m.new_content, so
-    # sending one the plain way puts the replacement text on the
-    # homeserver in the clear, in a room whose whole point is that it is
-    # not. The Megolm path cannot carry it either: crypto_ops$send()
-    # takes text, msgtype, markdown and mentions, and there is nowhere in
-    # that shape to put a relation.
-    crypto <- matrix_crypto_require(client)
-    if (!is.null(crypto) &&
-        client$crypto_ops$encrypted(crypto, client$env$mx, channel)) {
-        stop("chat.api: cannot edit a message in the encrypted room ",
-             channel, ". An edit carries the replacement text in an ",
-             "ordinary event, and posting one would put it on the ",
-             "homeserver in the clear.", call. = FALSE)
-    }
-    sess <- mx.client::mx_client_session(client$env$mx)
-    fn <- client$edit_fn %||% mx.api::mx_send
+    msgtype <- matrix_msgtype(kind)
     html <- if (identical(markup, "markdown")) {
         mx.client::mx_markdown_to_html(text)
     } else {
         NULL
     }
-    msgtype <- matrix_msgtype(kind)
-    new_content <- list(msgtype = msgtype, body = text)
     # A supplied fragment wins over one rendered from markdown: the
     # caller has markup the renderer cannot express, which is the only
     # reason to pass one.
     if (!is.null(rich)) {
         html <- rich
     }
+    new_content <- list(msgtype = msgtype, body = text)
     if (!is.null(html)) {
         new_content$format <- "org.matrix.custom.html"
         new_content$formatted_body <- html
@@ -1215,6 +1219,23 @@ chat_edit.chat_matrix <- function(client, channel, message_id, text,
         # it is a correction rather than the bot repeating itself.
         extra$formatted_body <- paste0("* ", html)
     }
+    # In an encrypted room the whole event -- the "* " fallback body, the
+    # m.new_content and the relation -- is encrypted with Megolm, so the
+    # replacement text never reaches the homeserver in the clear. The
+    # crypto send path carries the relation as extra content.
+    crypto <- matrix_crypto_require(client)
+    if (!is.null(crypto) &&
+        client$crypto_ops$encrypted(crypto, client$env$mx, channel)) {
+        # markdown = FALSE: the fallback's formatted_body is already in
+        # `extra` ("* " + html), so letting the content builder render
+        # "* text" again would turn the asterisk into a bullet list.
+        event <- client$crypto_ops$send(crypto, client$env$mx, channel,
+            paste0("* ", text), msgtype = msgtype, markdown = FALSE,
+            extra = extra)
+        return(invisible(as.character(event)))
+    }
+    sess <- mx.client::mx_client_session(client$env$mx)
+    fn <- client$edit_fn %||% mx.api::mx_send
     invisible(as.character(fn(sess, channel, paste0("* ", text),
                               msgtype = msgtype, extra = extra)))
 }

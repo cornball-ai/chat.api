@@ -30,7 +30,8 @@ A list with at least: \code{threads} (can post into
   \code{chat_send(files =)} works), \code{attachments} (inbound:
   media comes back out of \code{\link{chat_poll}} as
   \code{\link{chat_attachment}} records), \code{typing},
-  \code{e2ee}, \code{identity_override} (logicals),
+  \code{e2ee}, \code{calls} (\code{\link{chat_call_join}} works),
+  \code{identity_override} (logicals),
   \code{user_identity} (a send can authenticate as a real member of
   the platform rather than as the bot -- Slack's
   \code{chat_send(as_user = TRUE)} with a user token; a property of
