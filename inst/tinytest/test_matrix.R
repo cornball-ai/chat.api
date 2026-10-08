@@ -2164,23 +2164,54 @@ local({
     expect_null(seen$`m.new_content`$format)
 })
 
-# An encrypted room refuses. The edit carries its replacement text in an
-# ordinary event, so sending one would put it on the homeserver in the
-# clear -- in the room whose whole point is that it is not.
+# An encrypted room edits through the Megolm path: the "* " fallback
+# body, the m.new_content and the relation all ride inside the
+# ciphertext, so the replacement text never reaches the homeserver in
+# the clear, and the plaintext edit transport is never touched.
 local({
     ctx <- new.env(parent = emptyenv())
+    seen <- NULL
     ops <- list(init = function(...) ctx,
                 encrypted = function(crypto, mx, room_id) TRUE,
-                send = function(...) "$enc",
+                send = function(crypto, mx, room_id, text, ...) {
+        seen <<- c(list(room_id = room_id, text = text), list(...))
+        "$enc"
+    },
                 decrypt = function(...) list())
     cl <- seam_client(mx = fake_mx(user_id = "@e2ee-edit:ex"),
                       .crypto = ops, e2ee = TRUE,
                       .edit = function(...) stop("must not be reached"))
-    expect_error(chat_edit(cl, "!secret:ex", "$orig", "shh"),
-                 "in the clear")
-    # And the capability says so up front, rather than letting a
-    # consumer find out by trying.
-    expect_false(chat_capabilities(cl)$edits)
+    expect_identical(chat_edit(cl, "!secret:ex", "$orig", "shh"), "$enc")
+    expect_identical(seen$room_id, "!secret:ex")
+    expect_identical(seen$text, "* shh")           # the fallback body
+    expect_identical(seen$extra[["m.new_content"]]$body, "shh")
+    expect_identical(seen$extra[["m.relates_to"]],
+                     list(rel_type = "m.replace", event_id = "$orig"))
+    # And the capability says so, so a consumer need not find out by trying.
+    expect_true(chat_capabilities(cl)$edits)
+})
+# A markdown edit in an encrypted room renders the fallback HTML once,
+# into extra, and sends the crypto body plain -- so the content builder
+# never re-renders "* text" and turns the asterisk into a bullet list.
+local({
+    ctx <- new.env(parent = emptyenv())
+    seen <- NULL
+    ops <- list(init = function(...) ctx,
+                encrypted = function(crypto, mx, room_id) TRUE,
+                send = function(crypto, mx, room_id, text, markdown = FALSE, ...) {
+        seen <<- c(list(text = text, markdown = markdown), list(...))
+        "$enc"
+    },
+                decrypt = function(...) list())
+    cl <- seam_client(mx = fake_mx(user_id = "@e2ee-md:ex"),
+                      .crypto = ops, e2ee = TRUE)
+    chat_edit(cl, "!secret:ex", "$orig", "**done**", markup = "markdown")
+    expect_false(seen$markdown)                      # not re-rendered
+    expect_identical(seen$text, "* **done**")
+    expect_true(grepl("<strong>done</strong>", seen$extra$formatted_body))
+    expect_true(startsWith(seen$extra$formatted_body, "* "))
+    expect_true(grepl("<strong>done</strong>",
+                      seen$extra[["m.new_content"]]$formatted_body))
 })
 expect_true(chat_capabilities(seam_client())$edits)
 

@@ -687,7 +687,8 @@ matrix_crypto_content <- function(text, msgtype = "m.text", markdown = FALSE,
 # individual devices that cannot be verified is mx.client's decision to
 # make, and it is a different one.
 matrix_crypto_send <- function(crypto, mx, room_id, text, msgtype = "m.text",
-                               markdown = FALSE, mentions = NULL) {
+                               markdown = FALSE, mentions = NULL,
+                               extra = NULL) {
     members <- mx.api::mx_room_members(mx.client::mx_client_session(mx),
                                        room_id)
     if (!length(members)) {
@@ -697,6 +698,12 @@ matrix_crypto_send <- function(crypto, mx, room_id, text, msgtype = "m.text",
     }
     content <- matrix_crypto_content(text, msgtype = msgtype,
                                      markdown = markdown, mentions = mentions)
+    # Extra content fields (an edit's m.new_content and m.relates_to) ride
+    # inside the ciphertext like any other, so an edit in an encrypted
+    # room keeps its replacement text off the homeserver.
+    for (nm in names(extra)) {
+        content[[nm]] <- extra[[nm]]
+    }
     res <- mx.client::mx_send_encrypted(mx, crypto$account, crypto$sessions,
                                         room_id, content, crypto$store,
                                         member_ids = members)

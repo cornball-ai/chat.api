@@ -1,5 +1,11 @@
 # chat.api 0.1.0.1
 
+* Matrix `chat_edit()` works in an encrypted room. The edit's "* "
+  fallback body, its `m.new_content` and the `m.replace` relation now
+  ride inside the Megolm ciphertext, so the replacement text stays off
+  the homeserver; `chat_capabilities()$edits` is TRUE on an e2ee client.
+  (A call trims an interrupted reply posted to the room by editing it,
+  and calls run in encrypted rooms.)
 * Matrix clients can take part in a room's call: `chat_call_join()`
   announces the client as a MatrixRTC member, obtains the media server's
   address and token, and exchanges per-member media keys over Olm for as
