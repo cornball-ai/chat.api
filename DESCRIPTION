@@ -1,8 +1,8 @@
 Package: chat.api
 Type: Package
 Title: Transport-Agnostic Chat Contract
-Version: 0.1.0.1
-Date: 2026-10-06
+Version: 0.1.0.2
+Date: 2026-10-21
 Authors@R: c(
     person("Troy", "Hernandez", role = c("aut", "cre"),
            email = "troy@cornball.ai",
