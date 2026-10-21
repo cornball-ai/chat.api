@@ -208,28 +208,52 @@ chat_relogin.chat_matrix <- function(client, ...) {
 }
 
 #' @export
-chat_set_identity.chat_matrix <- function(client, display, ...) {
-    fn <- client$identity_fn %||% mx.client::mx_set_displayname
-    # The failure is held, not swallowed: the reload below has to run
-    # either way, and the caller still has to hear that the rename did
-    # not happen.
-    #
-    # mx_set_displayname() wraps itself in mx_with_relogin(), which
-    # persists a refreshed config *before* retrying and then returns only
-    # TRUE, discarding the client it refreshed. So a relogin whose retry
-    # then failed -- rate limit, transient 5xx -- has still rotated the
-    # token and still written it, and the live one is on disk while this
-    # client holds the rejected one. Reloading only on success is exactly
-    # how the next send goes out on a token the homeserver already
-    # refused, and it fails silently, because nothing in this stack
-    # relogins on a send.
-    err <- NULL
-    tryCatch(fn(client$env$mx, display), error = function(e) err <<- e)
-    matrix_reload_into(client)
-    if (!is.null(err)) {
-        stop(err)
+chat_set_identity.chat_matrix <- function(client, display = NULL,
+                                          avatar = NULL, ...) {
+    if (is.null(display) && is.null(avatar)) {
+        return(invisible(FALSE))
+    }
+    if (!is.null(display)) {
+        fn <- client$identity_fn %||% mx.client::mx_set_displayname
+        # The failure is held, not swallowed: the reload below has to run
+        # either way, and the caller still has to hear that the rename did
+        # not happen.
+        #
+        # mx_set_displayname() wraps itself in mx_with_relogin(), which
+        # persists a refreshed config *before* retrying and then returns only
+        # TRUE, discarding the client it refreshed. So a relogin whose retry
+        # then failed -- rate limit, transient 5xx -- has still rotated the
+        # token and still written it, and the live one is on disk while this
+        # client holds the rejected one. Reloading only on success is exactly
+        # how the next send goes out on a token the homeserver already
+        # refused, and it fails silently, because nothing in this stack
+        # relogins on a send.
+        err <- NULL
+        tryCatch(fn(client$env$mx, display), error = function(e) err <<- e)
+        matrix_reload_into(client)
+        if (!is.null(err)) {
+            stop(err)
+        }
+    }
+    if (!is.null(avatar)) {
+        # After the rename, so a token the rename rotated is the one the
+        # upload goes out on. Errors propagate: a picture that silently
+        # did not change is the old picture, and the caller believes
+        # otherwise.
+        avatar_fn <- client$avatar_fn %||% matrix_set_avatar
+        avatar_fn(client$env$mx, avatar)
     }
     invisible(TRUE)
+}
+
+# Upload an image and make it the account's picture. mx_upload() picks
+# the content type from the file's extension, which is what a client
+# renders the picture by.
+matrix_set_avatar <- function(mx, path) {
+    sess <- mx.client::mx_client_session(mx)
+    mxc <- mx.api::mx_upload(sess, path)
+    mx.api::mx_set_avatar_url(sess, mxc)
+    invisible(mxc)
 }
 
 # Re-read the config from wherever this client's was loaded and adopt it.

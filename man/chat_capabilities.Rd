@@ -32,6 +32,8 @@ A list with at least: \code{threads} (can post into
   media comes back out of \code{\link{chat_poll}} as
   \code{\link{chat_attachment}} records), \code{typing},
   \code{e2ee}, \code{calls} (\code{\link{chat_call_join}} works),
+  \code{avatar} (\code{\link{chat_set_identity}} can set the
+  account's picture, not only its name),
   \code{identity_override} (logicals),
   \code{user_identity} (a send can authenticate as a real member of
   the platform rather than as the bot -- Slack's

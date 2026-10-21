@@ -151,6 +151,10 @@
 #'   \code{mx.api::mx_read_receipt}. Leave NULL in production.
 #' @param .identity Testing seam: replacement for
 #'   \code{mx.client::mx_set_displayname}. Leave NULL in production.
+#' @param .avatar Testing seam: replacement for the upload-then-set
+#'   pair behind \code{chat_set_identity(avatar =)}
+#'   (\code{mx.api::mx_upload} and \code{mx_set_avatar_url}). Leave
+#'   NULL in production.
 #' @param .rich Testing seam: replacement for \code{mx.api::mx_send} on
 #'   the rich-send path. Leave NULL in production.
 #' @param .edit Testing seam: replacement for \code{mx.api::mx_send} on
@@ -187,7 +191,8 @@ chat_matrix <- function(app = NULL, path = NULL, save_cursor = TRUE,
                         .get_state = NULL, .extract_media = NULL,
                         .download = NULL, .channels = NULL, .history = NULL,
                         .pending = NULL, .read = NULL, .identity = NULL,
-                        .edit = NULL, .rich = NULL, .call = NULL) {
+                        .edit = NULL, .rich = NULL, .call = NULL,
+                        .avatar = NULL) {
     seams <- list(.sync, .extract, .send, .media)
     if ((is.null(mx) || any(vapply(seams, is.null, logical(1)))) &&
         !requireNamespace("mx.client", quietly = TRUE)) {
@@ -248,7 +253,8 @@ chat_matrix <- function(app = NULL, path = NULL, save_cursor = TRUE,
                    download_fn = .download,
                    channels_fn = .channels, history_fn = .history,
                    pending_fn = .pending, read_fn = .read,
-                   identity_fn = .identity, edit_fn = .edit,
+                   identity_fn = .identity, avatar_fn = .avatar,
+                   edit_fn = .edit,
                    rich_fn = .rich,
                    crypto_ops = matrix_crypto_ops(.crypto),
                    call_ops = matrix_call_ops(.call), call_override = .call),
@@ -995,7 +1001,7 @@ chat_capabilities.chat_matrix <- function(client, ...) {
          invites = matrix_invites_available(), join = TRUE, whoami = TRUE,
          channels = TRUE, history = TRUE,
          pending = matrix_invites_available(), mark_read = TRUE,
-         set_identity = TRUE, relogin = TRUE,
+         set_identity = TRUE, avatar = TRUE, relogin = TRUE,
          channel_create = TRUE, leave = TRUE, channel_invite = TRUE,
          set_state = TRUE,
          files = !isTRUE(client$e2ee),

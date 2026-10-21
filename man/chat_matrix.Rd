@@ -36,7 +36,8 @@ chat_matrix(
   .identity = NULL,
   .edit = NULL,
   .rich = NULL,
-  .call = NULL
+  .call = NULL,
+  .avatar = NULL
 )
 }
 \arguments{
@@ -222,6 +223,11 @@ the rich-send path. Leave NULL in production.}
 call operations -- \code{join}, \code{handle}, \code{leave}
 (\code{mx.client::mx_call_join}, \code{mx_call_handle},
 \code{mx_call_leave}). Leave NULL in production.}
+
+\item{.avatar}{Testing seam: replacement for the upload-then-set
+pair behind \code{chat_set_identity(avatar =)}
+(\code{mx.api::mx_upload} and \code{mx_set_avatar_url}). Leave
+NULL in production.}
 }
 \value{
 A \code{chat_client} of class \code{chat_matrix}.

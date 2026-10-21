@@ -2119,12 +2119,36 @@ expect_error(chat_set_identity(structure(list(),
                                                    "chat_client")), "x"),
              "not supported by this adapter")
 
+# The picture goes through one seam standing for upload-then-set, and
+# the display name is left alone when only the picture was asked for.
+# Nothing asked for is FALSE; a refused upload propagates.
+local({
+    seen <- NULL
+    renamed <- FALSE
+    cl <- seam_client(.identity = function(client, name, ...) {
+        renamed <<- TRUE
+        TRUE
+    }, .avatar = function(mx, path) {
+        seen <<- path
+        "mxc://ex/abc"
+    })
+    expect_true(chat_set_identity(cl, avatar = "face.png"))
+    expect_identical(seen, "face.png")
+    expect_false(renamed)
+    expect_false(chat_set_identity(cl))
+})
+
+expect_error(chat_set_identity(seam_client(.avatar = function(...) {
+    stop("M_TOO_LARGE")
+}), avatar = "face.png"), "M_TOO_LARGE")
+
 local({
     caps <- chat_capabilities(seam_client())
     expect_true(caps$channels)
     expect_true(caps$history)
     expect_true(caps$mark_read)
     expect_true(caps$set_identity)
+    expect_true(caps$avatar)
     expect_true(caps$relogin)
     expect_identical(caps$pending, chat.api:::matrix_invites_available())
 })

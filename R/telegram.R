@@ -651,7 +651,8 @@ chat_capabilities.chat_telegram <- function(client, ...) {
          # No history, no list of chats, no read markers in the Bot
          # API. The chats a bot is in are whatever sends it updates.
          channels = FALSE, history = FALSE, pending = FALSE,
-         mark_read = FALSE, set_identity = TRUE, relogin = FALSE,
+         mark_read = FALSE, set_identity = TRUE, avatar = FALSE,
+         relogin = FALSE,
          channel_create = FALSE, leave = TRUE, channel_invite = FALSE,
          set_state = FALSE,
          files = TRUE, attachments = TRUE, typing = TRUE, e2ee = FALSE,
@@ -711,7 +712,13 @@ chat_addressed.chat_telegram <- function(client, message, ...) {
 }
 
 #' @export
-chat_set_identity.chat_telegram <- function(client, display, ...) {
+chat_set_identity.chat_telegram <- function(client, display = NULL,
+                                            avatar = NULL, ...) {
+    # The picture is BotFather's to set, so only a name is this
+    # adapter's to change.
+    if (is.null(display)) {
+        return(invisible(FALSE))
+    }
     # setMyName changes the bot's name, not its username: the handle
     # people address it by is fixed at BotFather. The cached identity
     # carried the old display and is now wrong.
