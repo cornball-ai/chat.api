@@ -652,7 +652,8 @@ chat_capabilities.chat_telegram <- function(client, ...) {
          # API. The chats a bot is in are whatever sends it updates.
          channels = FALSE, history = FALSE, pending = FALSE,
          mark_read = FALSE, set_identity = TRUE, relogin = FALSE,
-         channel_create = FALSE, leave = TRUE, set_state = FALSE,
+         channel_create = FALSE, leave = TRUE, channel_invite = FALSE,
+         set_state = FALSE,
          files = TRUE, attachments = TRUE, typing = TRUE, e2ee = FALSE,
          calls = FALSE, identity_override = FALSE, user_identity = FALSE,
          rich_markup = "html",

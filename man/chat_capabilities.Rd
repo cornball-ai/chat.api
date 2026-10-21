@@ -23,7 +23,8 @@ A list with at least: \code{threads} (can post into
   (\code{\link{chat_whoami}} works, and with it the default
   \code{\link{chat_addressed}}), \code{channel_create}
   (\code{\link{chat_channel_create}} works), \code{leave}
-  (\code{\link{chat_leave}} works), \code{set_state}
+  (\code{\link{chat_leave}} works), \code{channel_invite}
+  (\code{\link{chat_channel_invite}} works), \code{set_state}
   (durable channel state: both \code{\link{chat_set_state}} and
   \code{\link{chat_get_state}} work -- a transport has the pair or
   neither), \code{files} (outbound:
