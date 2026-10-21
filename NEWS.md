@@ -1,3 +1,13 @@
+# chat.api 0.1.0.2
+
+* `chat_channel_invite()` invites a user to a channel, the other side
+  of the invitations `chat_poll()` reports. Matrix implements it over
+  `mx.api::mx_room_invite()` (testing seam `.invite`), the loopback
+  adapter records it, and `chat_capabilities()$channel_invite` says
+  which adapters have it. (A consumer filing rooms under a space falls
+  back to a direct invite when restricted join rules fail, and had no
+  verb in the contract to do it with.)
+
 # chat.api 0.1.0.1
 
 * Matrix `chat_edit()` works in an encrypted room. The edit's "* "

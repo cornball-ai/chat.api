@@ -24,7 +24,21 @@ chat_loopback <- function() {
     # channel/type/state_key. A write replaces the previous content for
     # its key, which is the Matrix semantic consumers test against.
     env$state <- list()
+    # Invitations issued through chat_channel_invite(), each a
+    # list(channel, user). Recorded and nothing more: loopback has no
+    # membership to change, and the record is what a consumer's test
+    # asserts on.
+    env$invites <- list()
     structure(list(env = env), class = c("chat_loopback", "chat_client"))
+}
+
+#' @export
+chat_channel_invite.chat_loopback <- function(client, channel, user, ...) {
+    stopifnot(is.character(channel), length(channel) == 1L, nzchar(channel),
+              is.character(user), length(user) == 1L, nzchar(user))
+    client$env$invites[[length(client$env$invites) + 1L]] <-
+    list(channel = channel, user = user)
+    invisible(channel)
 }
 
 #' @export
@@ -146,7 +160,8 @@ chat_capabilities.chat_loopback <- function(client, ...) {
          members = FALSE, invites = FALSE, join = FALSE, whoami = TRUE,
          channels = TRUE, history = TRUE, pending = FALSE,
          mark_read = FALSE, set_identity = FALSE, relogin = FALSE,
-         channel_create = TRUE, leave = FALSE, set_state = TRUE,
+         channel_create = TRUE, leave = FALSE, channel_invite = TRUE,
+         set_state = TRUE,
          # files records the paths it was handed; attachments hands
          # them back out of the poll. Both TRUE is what makes loopback
          # the round-trip test double for media-carrying consumers.

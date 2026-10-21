@@ -464,7 +464,8 @@ chat_capabilities.chat_slack <- function(client, ...) {
          invites = FALSE, join = TRUE, whoami = TRUE,
          channels = TRUE, history = TRUE, pending = FALSE,
          mark_read = TRUE, set_identity = TRUE, relogin = FALSE,
-         channel_create = TRUE, leave = TRUE, set_state = FALSE,
+         channel_create = TRUE, leave = TRUE, channel_invite = FALSE,
+         set_state = FALSE,
          files = FALSE, attachments = FALSE, typing = FALSE, e2ee = FALSE,
          calls = FALSE, identity_override = TRUE,
          # Unlike every other flag here, this one is a property of the

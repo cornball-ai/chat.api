@@ -141,7 +141,8 @@ chat_resolve <- function(client, name, ...) {
 #'   (\code{\link{chat_whoami}} works, and with it the default
 #'   \code{\link{chat_addressed}}), \code{channel_create}
 #'   (\code{\link{chat_channel_create}} works), \code{leave}
-#'   (\code{\link{chat_leave}} works), \code{set_state}
+#'   (\code{\link{chat_leave}} works), \code{channel_invite}
+#'   (\code{\link{chat_channel_invite}} works), \code{set_state}
 #'   (durable channel state: both \code{\link{chat_set_state}} and
 #'   \code{\link{chat_get_state}} work -- a transport has the pair or
 #'   neither), \code{files} (outbound:
@@ -308,6 +309,40 @@ chat_leave.default <- function(client, channel, ...) {
     stop("chat_leave() is not supported by this adapter (",
          paste(class(client), collapse = "/"),
          "). Check chat_capabilities()$leave.", call. = FALSE)
+}
+
+#' Invite a user to a channel
+#'
+#' The other side of an invitation: \code{\link{chat_poll}} reports the
+#' ones this client receives, and this verb issues one. A bot that files
+#' rooms for people needs it about as often as it needs
+#' \code{\link{chat_channel_create}}, because a room nobody but the bot
+#' can enter does not exist for anyone else. Capability-gated: check
+#' \code{chat_capabilities()$channel_invite}.
+#'
+#' The default method throws, on \code{\link{chat_join}}'s reasoning: an
+#' invitation that silently did not go out leaves the caller believing
+#' someone can see a room they cannot.
+#'
+#' @param client A \code{chat_client}.
+#' @param channel Channel/room identifier.
+#' @param user The invitee's platform identifier, such as a Matrix user
+#'   id (\code{"@alice:example.org"}).
+#' @param ... Adapter-specific options.
+#' @return The channel identifier, invisibly.
+#' @examples
+#' cl <- chat_loopback()
+#' chat_channel_invite(cl, "general", "@alice:example.org")
+#' @export
+chat_channel_invite <- function(client, channel, user, ...) {
+    UseMethod("chat_channel_invite")
+}
+
+#' @export
+chat_channel_invite.default <- function(client, channel, user, ...) {
+    stop("chat_channel_invite() is not supported by this adapter (",
+         paste(class(client), collapse = "/"),
+         "). Check chat_capabilities()$channel_invite.", call. = FALSE)
 }
 
 #' Construct a normalized invitation record

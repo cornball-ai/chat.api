@@ -127,6 +127,8 @@
 #'   \code{mx.api::mx_room_create}. Leave NULL in production.
 #' @param .leave Testing seam: replacement for
 #'   \code{mx.api::mx_room_leave}. Leave NULL in production.
+#' @param .invite Testing seam: replacement for
+#'   \code{mx.api::mx_room_invite}. Leave NULL in production.
 #' @param .state Testing seam: replacement for
 #'   \code{mx.api::mx_set_state}. Leave NULL in production.
 #' @param .get_state Testing seam: replacement for
@@ -180,7 +182,8 @@ chat_matrix <- function(app = NULL, path = NULL, save_cursor = TRUE,
                         .send = NULL, .media = NULL, .typing = NULL,
                         .crypto = NULL, .save = NULL, .react = NULL,
                         .info = NULL, .members = NULL, .join = NULL,
-                        .create = NULL, .leave = NULL, .state = NULL,
+                        .create = NULL, .leave = NULL, .invite = NULL,
+                        .state = NULL,
                         .get_state = NULL, .extract_media = NULL,
                         .download = NULL, .channels = NULL, .history = NULL,
                         .pending = NULL, .read = NULL, .identity = NULL,
@@ -239,6 +242,7 @@ chat_matrix <- function(app = NULL, path = NULL, save_cursor = TRUE,
                    typing_fn = .typing, react_fn = .react,
                    info_fn = .info, members_fn = .members, join_fn = .join,
                    create_fn = .create, leave_fn = .leave,
+                   invite_fn = .invite,
                    state_fn = .state, get_state_fn = .get_state,
                    extract_media_fn = .extract_media,
                    download_fn = .download,
@@ -862,6 +866,16 @@ chat_leave.chat_matrix <- function(client, channel, ...) {
 }
 
 #' @export
+chat_channel_invite.chat_matrix <- function(client, channel, user, ...) {
+    # Errors propagate: an invitation that quietly failed leaves the
+    # caller believing someone can see a room they cannot.
+    sess <- mx.client::mx_client_session(client$env$mx)
+    invite_fn <- client$invite_fn %||% mx.api::mx_room_invite
+    invite_fn(sess, channel, user)
+    invisible(channel)
+}
+
+#' @export
 chat_download.chat_matrix <- function(client, attachment, dest = NULL, ...) {
     dest <- attachment_dest(attachment, dest)
     # An encrypted attachment is refused rather than fetched. The bytes
@@ -982,7 +996,8 @@ chat_capabilities.chat_matrix <- function(client, ...) {
          channels = TRUE, history = TRUE,
          pending = matrix_invites_available(), mark_read = TRUE,
          set_identity = TRUE, relogin = TRUE,
-         channel_create = TRUE, leave = TRUE, set_state = TRUE,
+         channel_create = TRUE, leave = TRUE, channel_invite = TRUE,
+         set_state = TRUE,
          files = !isTRUE(client$e2ee),
          # attachments tracks the installed mx.client, the way
          # reaction_events does: mx_extract_media_events() arrived in

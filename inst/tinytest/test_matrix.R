@@ -1492,6 +1492,27 @@ expect_error(chat_join(structure(list(), class = c("chat_nothing",
                                                    "chat_client")), "!a"),
              "not supported by this adapter")
 
+# ---- Inviting ----
+# The seam sees the room and the user, in mx_room_invite()'s order, and
+# the verb answers with the room.
+if (requireNamespace("mx.client", quietly = TRUE))
+local({
+    seen <- NULL
+    cl <- seam_client(.invite = function(session, room_id, user_id) {
+        seen <<- c(room_id, user_id)
+        "$ok"
+    })
+    expect_identical(chat_channel_invite(cl, "!a:ex", "@alice:ex"), "!a:ex")
+    expect_identical(seen, c("!a:ex", "@alice:ex"))
+})
+
+# A refused invitation propagates. Silently doing nothing would leave the
+# caller believing someone can see a room they cannot.
+if (requireNamespace("mx.client", quietly = TRUE))
+expect_error(chat_channel_invite(seam_client(.invite = function(...) {
+    stop("M_FORBIDDEN")
+}), "!a:ex", "@alice:ex"), "M_FORBIDDEN")
+
 # ---- Creating ----
 # The seam replaces mx.api::mx_room_create; adapter-specific options
 # (topic, visibility, invitees) ride through ... untouched.

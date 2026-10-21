@@ -24,6 +24,7 @@ chat_matrix(
   .join = NULL,
   .create = NULL,
   .leave = NULL,
+  .invite = NULL,
   .state = NULL,
   .get_state = NULL,
   .extract_media = NULL,
@@ -176,6 +177,9 @@ replacing \code{mx.api::mx_room_name} and
 
 \item{.leave}{Testing seam: replacement for
 \code{mx.api::mx_room_leave}. Leave NULL in production.}
+
+\item{.invite}{Testing seam: replacement for
+\code{mx.api::mx_room_invite}. Leave NULL in production.}
 
 \item{.state}{Testing seam: replacement for
 \code{mx.api::mx_set_state}. Leave NULL in production.}

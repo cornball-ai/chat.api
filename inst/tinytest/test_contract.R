@@ -132,13 +132,14 @@ local({
     expect_false("members" %in% names(formals(chat_channel_info)))
 })
 
-# ---- Every adapter answers the invite pair ----
+# ---- Every adapter answers the invite flags ----
+# Receiving one, accepting one, and issuing one are three flags.
 local({
     for (adapter in c("chat_loopback", "chat_irc", "chat_slack",
                       "chat_matrix", "chat_telegram")) {
         m <- getS3method("chat_capabilities", adapter)
         caps <- m(structure(list(env = new.env()), class = adapter))
-        for (flag in c("invites", "join")) {
+        for (flag in c("invites", "join", "channel_invite")) {
             expect_true(flag %in% names(caps), info = paste(adapter, flag))
             expect_true(is.logical(caps[[flag]]) && length(caps[[flag]]) == 1L,
                         info = paste(adapter, flag))
@@ -336,6 +337,23 @@ local({
     expect_true(chat_capabilities(lo)$channel_create)
     expect_false(chat_capabilities(lo)$leave)
     expect_error(chat_leave(lo, "general"), "not supported by this adapter")
+})
+
+# Inviting on the reference adapter records the invitation, which is
+# the verb's observable effect; an adapter without the verb says so
+# rather than dropping it, because a consumer that believes an
+# invitation went out has handed someone a room they cannot see.
+local({
+    lo <- chat_loopback()
+    expect_true(chat_capabilities(lo)$channel_invite)
+    expect_identical(chat_channel_invite(lo, "general", "@alice:ex"),
+                     "general")
+    expect_identical(lo$env$invites,
+                     list(list(channel = "general", user = "@alice:ex")))
+    expect_error(chat_channel_invite(lo, "general", ""), "nzchar")
+    nothing <- structure(list(), class = c("chat_nothing", "chat_client"))
+    expect_error(chat_channel_invite(nothing, "x", "@a:ex"),
+                 "not supported by this adapter")
 })
 
 # ---- Channel state on the reference adapter ----
