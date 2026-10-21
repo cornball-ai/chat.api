@@ -150,6 +150,8 @@ chat_resolve <- function(client, name, ...) {
 #'   media comes back out of \code{\link{chat_poll}} as
 #'   \code{\link{chat_attachment}} records), \code{typing},
 #'   \code{e2ee}, \code{calls} (\code{\link{chat_call_join}} works),
+#'   \code{avatar} (\code{\link{chat_set_identity}} can set the
+#'   account's picture, not only its name),
 #'   \code{identity_override} (logicals),
 #'   \code{user_identity} (a send can authenticate as a real member of
 #'   the platform rather than as the bot -- Slack's
@@ -1006,8 +1008,9 @@ chat_mark_read.default <- function(client, channel, message_id, ...) {
 
 #' Set this client's persistent identity
 #'
-#' The account's own display name, as everyone in every channel sees it
-#' until it is changed again. Distinct from \code{\link{chat_send}}'s
+#' The account's own display name and, where the platform lets a bot
+#' set one, its picture, as everyone in every channel sees them until
+#' they are changed again. Distinct from \code{\link{chat_send}}'s
 #' \code{identity} argument, which decorates a single message on
 #' platforms that allow it.
 #'
@@ -1020,22 +1023,31 @@ chat_mark_read.default <- function(client, channel, message_id, ...) {
 #' has to know it happened.
 #'
 #' @param client A \code{chat_client}.
-#' @param display New display name.
+#' @param display New display name, or NULL to leave it as it is.
+#' @param avatar Path to an image file for the account's picture, or
+#'   NULL to leave it. Set where the platform lets a bot change its own
+#'   picture: Matrix uploads the file and points the profile at it. An
+#'   adapter whose platform sets a bot's picture outside its API
+#'   ignores it, on \code{\link{chat_typing}}'s reasoning, and answers
+#'   FALSE when it was all that was asked for.
 #' @param ... Adapter-specific options.
-#' @return TRUE if the identity was changed, invisibly.
+#' @return TRUE if the identity was changed, invisibly; FALSE when
+#'   nothing was asked for that the adapter can set.
 #' @examples
 #' \dontrun{
 #' # Requires a saved Matrix configuration and account credentials.
 #' cl <- chat_matrix(app = "mybot")
 #' chat_set_identity(cl, "Example Bot")
+#' chat_set_identity(cl, avatar = "face.png")
 #' }
 #' @export
-chat_set_identity <- function(client, display, ...) {
+chat_set_identity <- function(client, display = NULL, avatar = NULL, ...) {
     UseMethod("chat_set_identity")
 }
 
 #' @export
-chat_set_identity.default <- function(client, display, ...) {
+chat_set_identity.default <- function(client, display = NULL, avatar = NULL,
+                                      ...) {
     stop("chat_set_identity() is not supported by this adapter (",
          paste(class(client), collapse = "/"),
          "). Check chat_capabilities()$set_identity.", call. = FALSE)

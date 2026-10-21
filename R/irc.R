@@ -136,7 +136,8 @@ chat_capabilities.chat_irc <- function(client, ...) {
          reactions = FALSE, reaction_events = FALSE, channel_info = FALSE,
          members = FALSE, invites = FALSE, join = FALSE, whoami = TRUE,
          channels = FALSE, history = FALSE, pending = FALSE,
-         mark_read = FALSE, set_identity = TRUE, relogin = FALSE,
+         mark_read = FALSE, set_identity = TRUE, avatar = FALSE,
+         relogin = FALSE,
          # IRC JOIN would create a channel implicitly, but this adapter
          # has no join verb yet, so neither flag can be TRUE honestly.
          channel_create = FALSE, leave = FALSE, channel_invite = FALSE,
@@ -193,7 +194,13 @@ chat_disconnect.chat_irc <- function(client, ...) {
 }
 
 #' @export
-chat_set_identity.chat_irc <- function(client, display, ...) {
+chat_set_identity.chat_irc <- function(client, display = NULL, avatar = NULL,
+                                       ...) {
+    # IRC has no pictures, and no display name distinct from the nick,
+    # so this is a NICK change or nothing.
+    if (is.null(display)) {
+        return(invisible(FALSE))
+    }
     # IRC has no display name distinct from the nick, so this is a NICK
     # change. The server can refuse it (collision, length, restricted
     # characters) and says so asynchronously in a numeric this adapter

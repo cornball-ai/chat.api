@@ -1,3 +1,13 @@
+# chat.api 0.1.0.3
+
+* `chat_set_identity()` takes `avatar`, a path to an image, alongside
+  `display`: both are the account's persistent identity. Matrix uploads
+  the file and points the profile at it (testing seam `.avatar`);
+  adapters whose platform sets a bot's picture outside its API ignore
+  it and answer FALSE when it was all that was asked for;
+  `chat_capabilities()$avatar` says which is which. Both arguments are
+  optional now, and asking for nothing is FALSE.
+
 # chat.api 0.1.0.2
 
 * `chat_channel_invite()` invites a user to a channel, the other side

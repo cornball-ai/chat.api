@@ -159,7 +159,8 @@ chat_capabilities.chat_loopback <- function(client, ...) {
          reactions = FALSE, reaction_events = FALSE, channel_info = FALSE,
          members = FALSE, invites = FALSE, join = FALSE, whoami = TRUE,
          channels = TRUE, history = TRUE, pending = FALSE,
-         mark_read = FALSE, set_identity = FALSE, relogin = FALSE,
+         mark_read = FALSE, set_identity = FALSE, avatar = FALSE,
+         relogin = FALSE,
          channel_create = TRUE, leave = FALSE, channel_invite = TRUE,
          set_state = TRUE,
          # files records the paths it was handed; attachments hands

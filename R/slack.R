@@ -463,7 +463,8 @@ chat_capabilities.chat_slack <- function(client, ...) {
          # different thing, and does work.
          invites = FALSE, join = TRUE, whoami = TRUE,
          channels = TRUE, history = TRUE, pending = FALSE,
-         mark_read = TRUE, set_identity = TRUE, relogin = FALSE,
+         mark_read = TRUE, set_identity = TRUE, avatar = FALSE,
+         relogin = FALSE,
          channel_create = TRUE, leave = TRUE, channel_invite = FALSE,
          set_state = FALSE,
          files = FALSE, attachments = FALSE, typing = FALSE, e2ee = FALSE,
@@ -623,7 +624,13 @@ chat_mark_read.chat_slack <- function(client, channel, message_id, ...) {
 }
 
 #' @export
-chat_set_identity.chat_slack <- function(client, display, ...) {
+chat_set_identity.chat_slack <- function(client, display = NULL,
+                                         avatar = NULL, ...) {
+    # A bot's picture is set in the app configuration, not through the
+    # API; the display name is the one piece this adapter can change.
+    if (is.null(display)) {
+        return(invisible(FALSE))
+    }
     api <- client$api_fn %||% slackr::call_slack_api
     resp <- api("/api/users.profile.set", .method = "POST",
                 token = client$token,
