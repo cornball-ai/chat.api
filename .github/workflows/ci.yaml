@@ -45,9 +45,9 @@ jobs:
                                             "https://cran.r-project.org"),
                                   type = "source", upgrade = "never")
             # Pinned attachment support until these versions reach the drat/CRAN.
-            install.packages("https://github.com/cornball-ai/mx.crypto/archive/74980d6453b71bc6eac9639416e0ec96df971ba9.tar.gz",
+            utils::install.packages("https://github.com/cornball-ai/mx.crypto/archive/74980d6453b71bc6eac9639416e0ec96df971ba9.tar.gz",
                              repos = NULL, type = "source")
-            install.packages("https://github.com/cornball-ai/mx.client/archive/f3bece6891572eb120ca5f942ee7227df2dc2422.tar.gz",
+            utils::install.packages("https://github.com/cornball-ai/mx.client/archive/f3bece6891572eb120ca5f942ee7227df2dc2422.tar.gz",
                              repos = NULL, type = "source")
             remotes::install_deps(".", dependencies = TRUE,
                                   repos = "https://cran.r-project.org",
