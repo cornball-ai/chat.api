@@ -50,10 +50,11 @@
 #'   any direct send already carries, since \code{mx_with_relogin()}
 #'   wraps only the sync. The sync cursor is held back until the crypto
 #'   state is safe, on disk and on the client, so a sync carrying a room
-#'   key is not marked consumed until that key is stored. And attachments
-#'   are refused in encrypted rooms, because Matrix media uploads are not
-#'   encrypted by this adapter -- \code{\link{chat_capabilities}} reports
-#'   \code{files = FALSE} to match.
+#'   key is not marked consumed until that key is stored. Attachments use
+#'   ciphertext uploads and encrypted file metadata with mx.client 0.2.1.4
+#'   and mx.crypto 0.2.2.2 or later. Older dependencies refuse encrypted
+#'   attachments before upload; \code{\link{chat_capabilities}} reports
+#'   \code{files} according to the installed helpers.
 #' @param crypto_store Character or NULL. Directory holding the pickled
 #'   Olm account and sessions. NULL derives it from \code{app} via
 #'   \code{mx.client::mx_crypto_store_dir()}, with a per-device
