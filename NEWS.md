@@ -1,3 +1,11 @@
+# chat.api 0.1.0.4
+
+- Send encrypted Matrix attachments using the adapter's existing crypto
+  context, with ciphertext-only uploads and encrypted file metadata.
+- Preserve attachment metadata from decrypted room events and verify encrypted
+  downloads before returning plaintext. File capability reporting follows the
+  installed attachment helpers; older dependencies still refuse safely.
+
 # chat.api 0.1.0.3
 
 * `chat_set_identity()` takes `avatar`, a path to an image, alongside

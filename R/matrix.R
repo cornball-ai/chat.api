@@ -50,10 +50,11 @@
 #'   any direct send already carries, since \code{mx_with_relogin()}
 #'   wraps only the sync. The sync cursor is held back until the crypto
 #'   state is safe, on disk and on the client, so a sync carrying a room
-#'   key is not marked consumed until that key is stored. And attachments
-#'   are refused in encrypted rooms, because Matrix media uploads are not
-#'   encrypted by this adapter -- \code{\link{chat_capabilities}} reports
-#'   \code{files = FALSE} to match.
+#'   key is not marked consumed until that key is stored. Attachments use
+#'   ciphertext uploads and encrypted file metadata with mx.client 0.2.1.4
+#'   and mx.crypto 0.2.2.2 or later. Older dependencies refuse encrypted
+#'   attachments before upload; \code{\link{chat_capabilities}} reports
+#'   \code{files} according to the installed helpers.
 #' @param crypto_store Character or NULL. Directory holding the pickled
 #'   Olm account and sessions. NULL derives it from \code{app} via
 #'   \code{mx.client::mx_crypto_store_dir()}, with a per-device
@@ -608,6 +609,7 @@ chat_poll.chat_matrix <- function(client, since = NULL, timeout = NULL, ...) {
             mentions = unlist(d$mentions, use.names = FALSE),
             encrypted = TRUE,
             sender_verified = isTRUE(d$sender_verified),
+            attachments = matrix_decrypted_attachments(d, res$client$user_id),
             raw = d)
     }
     # Inbound media. A picture is its own m.room.message event on
@@ -721,21 +723,22 @@ chat_send.chat_matrix <- function(client, channel, text,
              "so the reply would leave the thread. Check ",
              "chat_capabilities()$threads.", call. = FALSE)
     }
-    if (encrypted && !is.null(files)) {
-        # mx_send_media() posts an ordinary cleartext m.file event: the
-        # upload is not encrypted, and neither is the URL. There is no
-        # encrypted-attachment path to fall back to, so this refuses
-        # rather than leaking. chat_capabilities()$files reports FALSE on
-        # an e2ee client for the same reason.
+    if (encrypted && !is.null(files) && !matrix_attachment_crypto_available()) {
         stop("chat.api: cannot send attachments to the encrypted room ",
-             channel, ". Matrix media uploads are not encrypted by this ",
-             "adapter, and posting them would put the file on the ",
-             "homeserver in the clear.", call. = FALSE)
+             channel, "; install mx.client >= 0.2.1.4 and mx.crypto >= 0.2.2.2.",
+             call. = FALSE)
     }
     media_ids <- character()
     if (!is.null(files)) {
         for (f in files) {
-            event <- client$media_fn(client$env$mx, f, room = channel)
+            if (encrypted) {
+                content <- mx.client::mx_upload_encrypted(client$env$mx, f)
+                event <- client$crypto_ops$send(crypto, client$env$mx, channel,
+                    content$body, msgtype = content$msgtype,
+                    extra = content[c("file", "info")])
+            } else {
+                event <- client$media_fn(client$env$mx, f, room = channel)
+            }
             media_ids <- c(media_ids, as.character(event))
         }
     }
@@ -884,16 +887,13 @@ chat_channel_invite.chat_matrix <- function(client, channel, user, ...) {
 #' @export
 chat_download.chat_matrix <- function(client, attachment, dest = NULL, ...) {
     dest <- attachment_dest(attachment, dest)
-    # An encrypted attachment is refused rather than fetched. The bytes
-    # behind the mxc URL are ciphertext, and this adapter has no
-    # decryption path for media -- downloading them would hand the
-    # caller a file that is not the picture, with nothing to say so.
-    # The same bargain chat_send() makes refusing to upload into an
-    # encrypted room.
     if (isTRUE(attachment$raw$encrypted)) {
-        stop("chat.api: attachment ", attachment$id, " is encrypted, and ",
-             "this adapter cannot decrypt media. Fetching it would ",
-             "write ciphertext to ", dest, ".", call. = FALSE)
+        if (!matrix_attachment_crypto_available()) {
+            stop("chat.api: cannot decrypt media; install mx.client >= 0.2.1.4 ",
+                 "and mx.crypto >= 0.2.2.2", call. = FALSE)
+        }
+        return(mx.client::mx_download_encrypted(client$env$mx,
+                                                attachment$raw$file, dest))
     }
     url <- attachment$url
     if (!is.character(url) || length(url) != 1L || is.na(url) || !nzchar(url)) {
@@ -985,11 +985,8 @@ chat_capabilities.chat_matrix <- function(client, ...) {
     # because the context is built on first use, and a capability that
     # flipped after the first poll would be worse than either answer.
     #
-    # files is FALSE on an e2ee client. mx_send_media() posts a cleartext
-    # m.file event whatever the room's encryption state says, and this
-    # adapter has no encrypted-attachment path, so chat_send() refuses
-    # attachments to an encrypted room. TRUE would advertise something
-    # that fails in exactly the rooms such a client exists for.
+    # Encrypted files require both the attachment primitive and upload
+    # helper. Older optional packages retain the fail-closed refusal.
     list(threads = matrix_threads_available() && !isTRUE(client$e2ee),
          thread_replies = TRUE,
          # An edit works encrypted too: the Megolm path carries the
@@ -1004,7 +1001,7 @@ chat_capabilities.chat_matrix <- function(client, ...) {
          set_identity = TRUE, avatar = TRUE, relogin = TRUE,
          channel_create = TRUE, leave = TRUE, channel_invite = TRUE,
          set_state = TRUE,
-         files = !isTRUE(client$e2ee),
+         files = !isTRUE(client$e2ee) || matrix_attachment_crypto_available(),
          # attachments tracks the installed mx.client, the way
          # reaction_events does: mx_extract_media_events() arrived in
          # 0.2.0.6, and on an older build the poll has no source for
@@ -1012,11 +1009,8 @@ chat_capabilities.chat_matrix <- function(client, ...) {
          # media messages come back out of chat_poll(), and
          # chat_download() fetches their bytes.
          #
-         # TRUE on an e2ee client too, unlike outbound files. The
-         # events are reported either way; what an encrypted
-         # attachment cannot do is be fetched, and chat_download()
-         # refuses that one rather than the whole room's media going
-         # unmentioned.
+         # Events remain visible with older dependencies; fetching encrypted
+         # bytes requires matrix_attachment_crypto_available().
          attachments = matrix_media_capable(client),
          typing = TRUE, e2ee = isTRUE(client$e2ee),
          # A call's media keys travel over Olm, so only an e2ee client
