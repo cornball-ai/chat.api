@@ -600,9 +600,9 @@ expect_null(enc$env$crypto)
 # The capability answers from the setting, not the context, so it does not
 # flip after the first poll.
 expect_true(chat_capabilities(enc)$e2ee)
-# ... and files is FALSE, because mx_send_media posts a cleartext m.file
-# event whatever the room's encryption state says.
-expect_false(chat_capabilities(enc)$files)
+# Files require the encrypted attachment helpers.
+expect_identical(chat_capabilities(enc)$files,
+                 chat.api:::matrix_attachment_crypto_available())
 # ... and so is threads: the encrypted send path has nowhere to put an
 # m.relates_to. A threaded send is refused rather than posted to the
 # room's main timeline, which is files' bargain and not rich's -- a
@@ -887,11 +887,11 @@ plain <- seam_client(.crypto = f$ops,
 expect_identical(chat_send(plain, "!unknown:ex", "hi"), "$clear1")
 expect_identical(cleartext$n, 1L)
 
-# ---- Attachments are refused in encrypted rooms ----
-# mx_send_media() posts an ordinary cleartext m.file event. The check used
-# to run after the upload loop, so the files reached the homeserver in the
-# clear and only the text took the Megolm path -- and an attachment-only
-# send never asked at all.
+# ---- Older dependencies refuse attachments before any upload ----
+local({
+available <- chat.api:::matrix_attachment_crypto_available
+assignInNamespace("matrix_attachment_crypto_available", function() FALSE, "chat.api")
+on.exit(assignInNamespace("matrix_attachment_crypto_available", available, "chat.api"))
 f <- fake_crypto()
 uploads <- new.env(parent = emptyenv()); uploads$n <- 0L
 enc <- seam_client(e2ee = TRUE, .crypto = f$ops,
@@ -912,6 +912,7 @@ expect_identical(uploads$n, 0L)
 ids <- chat_send(enc, "!plain:ex", "see these", files = c("/a.png", "/b.png"))
 expect_identical(ids, c("$ma.png", "$mb.png", "$id"))
 expect_identical(uploads$n, 2L)
+})
 
 # markup, kind, and mentions carry into the encrypted branch. Dropping
 # them would make an encrypted room silently lose formatting and pings
@@ -1646,10 +1647,11 @@ local({
     expect_true(file.exists(dest))
 })
 
-# An encrypted attachment is refused rather than fetched: the bytes
-# behind the URL are ciphertext and this adapter cannot decrypt media,
-# so downloading would write a file that is not the picture.
+# Older dependencies refuse encrypted media before fetching ciphertext.
 local({
+    available <- chat.api:::matrix_attachment_crypto_available
+    assignInNamespace("matrix_attachment_crypto_available", function() FALSE, "chat.api")
+    on.exit(assignInNamespace("matrix_attachment_crypto_available", available, "chat.api"))
     cl <- seam_client(.download = function(...) stop("must not fetch"))
     enc_att <- chat_attachment(id = "mxc://ex/enc", name = "secret.png",
                                url = "mxc://ex/enc",
@@ -1680,7 +1682,7 @@ local({
                       e2ee = TRUE, .crypto = fake_crypto()$ops)
     caps <- chat_capabilities(cl)
     expect_true(caps$attachments)
-    expect_false(caps$files)
+    expect_identical(caps$files, chat.api:::matrix_attachment_crypto_available())
 })
 
 # ---- Threads ----
