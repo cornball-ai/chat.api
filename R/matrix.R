@@ -51,8 +51,8 @@
 #'   wraps only the sync. The sync cursor is held back until the crypto
 #'   state is safe, on disk and on the client, so a sync carrying a room
 #'   key is not marked consumed until that key is stored. Attachments use
-#'   ciphertext uploads and encrypted file metadata with mx.client 0.2.1.4
-#'   and mx.crypto 0.2.2.2 or later. Older dependencies refuse encrypted
+#'   ciphertext uploads and encrypted file metadata with mx.client 0.3.0
+#'   and mx.crypto 0.3.0 or later. Older dependencies refuse encrypted
 #'   attachments before upload; \code{\link{chat_capabilities}} reports
 #'   \code{files} according to the installed helpers.
 #' @param crypto_store Character or NULL. Directory holding the pickled
@@ -712,7 +712,7 @@ chat_send.chat_matrix <- function(client, channel, text,
     }
     if (encrypted && !is.null(files) && !matrix_attachment_crypto_available()) {
         stop("chat.api: cannot send attachments to the encrypted room ",
-             channel, "; install mx.client >= 0.2.1.4 and mx.crypto >= 0.2.2.2.",
+             channel, "; install mx.client >= 0.3.0 and mx.crypto >= 0.3.0.",
              call. = FALSE)
     }
     media_ids <- character()
@@ -876,8 +876,8 @@ chat_download.chat_matrix <- function(client, attachment, dest = NULL, ...) {
     dest <- attachment_dest(attachment, dest)
     if (isTRUE(attachment$raw$encrypted)) {
         if (!matrix_attachment_crypto_available()) {
-            stop("chat.api: cannot decrypt media; install mx.client >= 0.2.1.4 ",
-                 "and mx.crypto >= 0.2.2.2", call. = FALSE)
+            stop("chat.api: cannot decrypt media; install mx.client >= 0.3.0 ",
+                 "and mx.crypto >= 0.3.0", call. = FALSE)
         }
         return(mx.client::mx_download_encrypted(client$env$mx,
                                                 attachment$raw$file, dest))
