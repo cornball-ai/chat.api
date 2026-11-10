@@ -2240,6 +2240,8 @@ local({
 # A markdown edit in an encrypted room renders the fallback HTML once,
 # into extra, and sends the crypto body plain -- so the content builder
 # never re-renders "* text" and turns the asterisk into a bullet list.
+# Rendering markdown is mx.client's, so this runs only where it is installed.
+if (requireNamespace("mx.client", quietly = TRUE))
 local({
     ctx <- new.env(parent = emptyenv())
     seen <- NULL
