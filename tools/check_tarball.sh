@@ -48,6 +48,7 @@ allowed_list() {
   cat <<'EOF'
 DESCRIPTION
 NAMESPACE
+NEWS.md
 README.md
 R
 man

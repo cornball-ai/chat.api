@@ -36,7 +36,6 @@ chat_matrix(
   .identity = NULL,
   .edit = NULL,
   .rich = NULL,
-  .call = NULL,
   .avatar = NULL
 )
 }
@@ -88,8 +87,8 @@ any direct send already carries, since \code{mx_with_relogin()}
 wraps only the sync. The sync cursor is held back until the crypto
 state is safe, on disk and on the client, so a sync carrying a room
 key is not marked consumed until that key is stored. Attachments use
-ciphertext uploads and encrypted file metadata with mx.client 0.2.1.4
-and mx.crypto 0.2.2.2 or later. Older dependencies refuse encrypted
+ciphertext uploads and encrypted file metadata with mx.client 0.3.0
+and mx.crypto 0.3.0 or later. Older dependencies refuse encrypted
 attachments before upload; \code{\link{chat_capabilities}} reports
 \code{files} according to the installed helpers.}
 
@@ -219,11 +218,6 @@ the edit path. Leave NULL in production.}
 
 \item{.rich}{Testing seam: replacement for \code{mx.api::mx_send} on
 the rich-send path. Leave NULL in production.}
-
-\item{.call}{Testing seam: a named list overriding any of the three
-call operations -- \code{join}, \code{handle}, \code{leave}
-(\code{mx.client::mx_call_join}, \code{mx_call_handle},
-\code{mx_call_leave}). Leave NULL in production.}
 
 \item{.avatar}{Testing seam: replacement for the upload-then-set
 pair behind \code{chat_set_identity(avatar =)}

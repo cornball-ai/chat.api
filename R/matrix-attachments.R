@@ -16,7 +16,7 @@ matrix_decrypted_attachments <- function(event, self_id) {
     inner <- list(type = event$type %||% "m.room.message",
                   content = event$content, event_id = event$event_id,
                   sender = event$sender, origin_server_ts = event$ts)
-    sync <- list(rooms = list(join = setNames(list(list(
+    sync <- list(rooms = list(join = stats::setNames(list(list(
         timeline = list(events = list(inner)))), event$room_id)))
     records <- mx.client::mx_extract_media_events(sync, self_id)
     if (!length(records)) return(NULL)

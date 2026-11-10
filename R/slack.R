@@ -468,7 +468,7 @@ chat_capabilities.chat_slack <- function(client, ...) {
          channel_create = TRUE, leave = TRUE, channel_invite = FALSE,
          set_state = FALSE,
          files = FALSE, attachments = FALSE, typing = FALSE, e2ee = FALSE,
-         calls = FALSE, identity_override = TRUE,
+         identity_override = TRUE,
          # Unlike every other flag here, this one is a property of the
          # instance, not the adapter: whether as_user = TRUE will work
          # depends on whether this client was built with a user_token,

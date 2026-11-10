@@ -31,7 +31,7 @@ A list with at least: \code{threads} (can post into
   \code{chat_send(files =)} works), \code{attachments} (inbound:
   media comes back out of \code{\link{chat_poll}} as
   \code{\link{chat_attachment}} records), \code{typing},
-  \code{e2ee}, \code{calls} (\code{\link{chat_call_join}} works),
+  \code{e2ee},
   \code{avatar} (\code{\link{chat_set_identity}} can set the
   account's picture, not only its name),
   \code{identity_override} (logicals),
