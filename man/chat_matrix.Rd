@@ -36,7 +36,6 @@ chat_matrix(
   .identity = NULL,
   .edit = NULL,
   .rich = NULL,
-  .call = NULL,
   .avatar = NULL
 )
 }
@@ -219,11 +218,6 @@ the edit path. Leave NULL in production.}
 
 \item{.rich}{Testing seam: replacement for \code{mx.api::mx_send} on
 the rich-send path. Leave NULL in production.}
-
-\item{.call}{Testing seam: a named list overriding any of the three
-call operations -- \code{join}, \code{handle}, \code{leave}
-(\code{mx.client::mx_call_join}, \code{mx_call_handle},
-\code{mx_call_leave}). Leave NULL in production.}
 
 \item{.avatar}{Testing seam: replacement for the upload-then-set
 pair behind \code{chat_set_identity(avatar =)}

@@ -656,7 +656,7 @@ chat_capabilities.chat_telegram <- function(client, ...) {
          channel_create = FALSE, leave = TRUE, channel_invite = FALSE,
          set_state = FALSE,
          files = TRUE, attachments = TRUE, typing = TRUE, e2ee = FALSE,
-         calls = FALSE, identity_override = FALSE, user_identity = FALSE,
+         identity_override = FALSE, user_identity = FALSE,
          rich_markup = "html",
          markup_dialects = c("plain", "markdown"),
          # 4096 characters after entities parsing. Characters, not

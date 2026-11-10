@@ -143,7 +143,7 @@ chat_capabilities.chat_irc <- function(client, ...) {
          channel_create = FALSE, leave = FALSE, channel_invite = FALSE,
          set_state = FALSE,
          files = FALSE, attachments = FALSE, typing = FALSE, e2ee = FALSE,
-         calls = FALSE, identity_override = FALSE, user_identity = FALSE,
+         identity_override = FALSE, user_identity = FALSE,
          rich_markup = character(),
          markup_dialects = "plain", max_message_bytes = 400L)
 }
