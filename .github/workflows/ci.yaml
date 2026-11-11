@@ -30,19 +30,14 @@ jobs:
         run: sudo apt-get install -y --no-install-recommends libcurl4-openssl-dev
 
       # Matrix from source so binary rebuilds cannot select older
-      # versions. mx.api and mx.crypto come from CRAN. mx.client 0.3.0 is
-      # pinned to its release commit until CRAN carries it; then the pin
-      # goes and mx.client joins the CRAN line above it. Include all
-      # adapter test packages from CRAN as well.
+      # versions. Include all adapter test packages from CRAN as well.
       - name: Install CRAN dependencies
         run: |
           Rscript -e '
             if (isTRUE(getOption("rapt.enabled"))) rapt::disable()
-            remotes::install_cran(c("mx.api", "mx.crypto"),
+            remotes::install_cran(c("mx.api", "mx.crypto", "mx.client"),
                                   repos = "https://cran.r-project.org",
                                   type = "source", upgrade = "never")
-            utils::install.packages("https://github.com/cornball-ai/mx.client/archive/fc7b4bf2cb22bbbfe8b3e9b115460d6e96ed77d4.tar.gz",
-                             repos = NULL, type = "source")
             remotes::install_deps(".", dependencies = TRUE,
                                   repos = "https://cran.r-project.org",
                                   upgrade = "never")'
