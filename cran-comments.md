@@ -13,10 +13,15 @@ Both versions are on CRAN.
 ## Test environments
 
 * Ubuntu 24.04.5 LTS, x86_64, R 4.6.1.
+* Windows Server 2022 x64, R-release 4.6.2 (2026-10-29 ucrt), win-builder.
+* Windows Server 2022 x64, R-devel (2026-11-10 r90874 ucrt), win-builder.
 
 ## R CMD check results
 
-0 errors | 0 warnings | 0 notes.
+0 errors | 0 warnings | 0 notes on all three platforms.
+
+Both Windows checks (win-builder, 2026-11-11) finished with Status: OK,
+including CRAN incoming feasibility, installation, examples, and tests.
 
 The Linux checks used `--as-cran --run-donttest`, including PDF and HTML
 manual generation, in a library holding only CRAN releases.
