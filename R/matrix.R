@@ -40,7 +40,10 @@
 #'   cleartext only, no crypto state, and \code{e2ee} stays FALSE in
 #'   \code{\link{chat_capabilities}}. Requires the 'mx.crypto' package,
 #'   which needs a Rust toolchain, and both \code{user_id} and
-#'   \code{device_id} on the wrapped config.
+#'   \code{device_id} on the wrapped config. With it off, an encrypted
+#'   room's events arrive as \code{m.room.encrypted} and are dropped
+#'   unread; \code{\link{chat_poll}} says so with a message naming the
+#'   room, once per room for the life of the client.
 #'
 #'   Three things change when it is on. The crypto state is built on
 #'   first use rather than here: from \code{\link{chat_poll}} that means
@@ -408,6 +411,35 @@ matrix_invites_available <- function() {
     "mx_extract_invite_records" %in% getNamespaceExports("mx.client")
 }
 
+# A client without e2ee in an encrypted room gets m.room.encrypted
+# events it cannot read, and the text extractor skips them. Nothing in
+# the poll said so, and the silence read as a dead bot: it had joined
+# the room, and every message after that vanished without a line in its
+# log. One message per room for the life of the client, in the log the
+# operator is already reading; the fix is e2ee = TRUE. An e2ee client
+# decrypts these events instead and never raises it.
+matrix_notice_encrypted <- function(client, sync) {
+    if (isTRUE(client$e2ee)) {
+        return(invisible(character()))
+    }
+    noticed <- client$env$encrypted_noticed %||% character()
+    fresh <- character()
+    joined <- sync$rooms$join
+    for (rid in setdiff(names(joined), noticed)) {
+        types <- vapply(joined[[rid]]$timeline$events,
+                        function(ev) as.character(ev$type %||% ""), "")
+        if ("m.room.encrypted" %in% types) {
+            fresh <- c(fresh, rid)
+        }
+    }
+    for (rid in fresh) {
+        message("chat.api: room ", rid, " is encrypted and this client has ",
+                "no e2ee; its messages are dropped")
+    }
+    client$env$encrypted_noticed <- c(noticed, fresh)
+    invisible(fresh)
+}
+
 # Sort messages or reactions into sync order, by their own event id.
 # Unpositioned events keep their arrival order at the end rather than
 # being dropped or interleaved by guesswork, and the tie-break on index
@@ -544,6 +576,7 @@ chat_poll.chat_matrix <- function(client, since = NULL, timeout = NULL, ...) {
         # becomes the live one.
         client$env$mx <- res$client
     }
+    matrix_notice_encrypted(client, res$sync)
 
     event_ts <- matrix_event_times(res$sync)
     event_pos <- matrix_event_order(res$sync)
