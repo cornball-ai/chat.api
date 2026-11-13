@@ -1,3 +1,11 @@
+# chat.api 0.2.0.1
+
+* A Matrix client built without `e2ee` now says when an encrypted room's
+  events reach it: `chat_poll()` emits a message naming the room the first
+  time it sees `m.room.encrypted` there, once per room for the life of the
+  client, instead of dropping the events in silence. Turning `e2ee` on is
+  the fix; the message is what makes the need visible in a bot's log.
+
 # chat.api 0.2.0
 
 * Send encrypted Matrix attachments using the adapter's existing crypto

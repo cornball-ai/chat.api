@@ -76,7 +76,10 @@ inbound. FALSE (the default) is the previous behaviour exactly:
 cleartext only, no crypto state, and \code{e2ee} stays FALSE in
 \code{\link{chat_capabilities}}. Requires the 'mx.crypto' package,
 which needs a Rust toolchain, and both \code{user_id} and
-\code{device_id} on the wrapped config.
+\code{device_id} on the wrapped config. With it off, an encrypted
+room's events arrive as \code{m.room.encrypted} and are dropped
+unread; \code{\link{chat_poll}} says so with a message naming the
+room, once per room for the life of the client.
 
 Three things change when it is on. The crypto state is built on
 first use rather than here: from \code{\link{chat_poll}} that means
