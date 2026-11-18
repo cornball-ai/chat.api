@@ -1,3 +1,13 @@
+# chat.api 0.2.0.2
+
+* `chat_history()` on Matrix returns pictures and encrypted messages, as
+  `chat_poll()` does. It dropped every picture and every encrypted
+  event, so a bot that read history after a restart missed the pictures
+  sent while it was down and saw nothing of an encrypted room. History
+  decrypts its page with the poll's own step, which may request a
+  missing key from the account's other devices; a page that cannot be
+  decrypted is reported and read for its cleartext.
+
 # chat.api 0.2.0.1
 
 * `chat_send()` and `chat_edit()` take `content`, a named list of keys

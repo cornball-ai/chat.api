@@ -305,6 +305,71 @@ matrix_raw_with_content <- function(record, contents) {
     record
 }
 
+# An event's time, from its origin_server_ts in milliseconds; NA when
+# unknown.
+matrix_ts <- function(ms) {
+    if (is.null(ms)) {
+        return(as.POSIXct(NA))
+    }
+    as.POSIXct(ms / 1000, origin = "1970-01-01")
+}
+
+# A decrypted record as a chat_message, the same from chat_poll() and
+# chat_history(). NULL for one that is not a message: mx.client hands
+# back every decrypted room event (a key, a ring notification, a
+# reaction), and those have no body; a chat_message with an empty body
+# is what a consumer trips over.
+matrix_decrypted_message <- function(d, ms, self_id) {
+    if (!is.character(d$body) || length(d$body) != 1L) {
+        return(NULL)
+    }
+    chat_message(id = as.character(d$event_id),
+                 channel = as.character(d$room_id),
+                 sender = as.character(d$sender),
+                 body = as.character(d$body), ts = matrix_ts(ms),
+                 thread = matrix_thread_root(d$relates_to),
+                 markup = "plain", kind = matrix_kind(d$msgtype),
+                 self = isTRUE(d$is_self),
+                 mentions = unlist(d$mentions, use.names = FALSE),
+                 encrypted = TRUE,
+                 sender_verified = isTRUE(d$sender_verified),
+                 attachments = matrix_decrypted_attachments(d, self_id),
+                 raw = d)
+}
+
+# A cleartext media record as a chat_message, the same from chat_poll()
+# and chat_history(). A picture is its own m.room.message event on
+# Matrix, so it becomes its own chat_message carrying one attachment --
+# the same shape chat_send() produces outbound, where each file is sent
+# as a separate event. `contents` holds the events' content by id.
+matrix_media_message <- function(a, ms, contents) {
+    name <- a$filename %||% a$body
+    chat_message(id = as.character(a$event_id),
+                 channel = as.character(a$room_id),
+                 sender = as.character(a$sender),
+                 # The body is the filename Matrix ships as the event's
+                 # text fallback. Kept, because it is what a client that
+                 # cannot render the picture shows, and what a consumer
+                 # writing a transcript has to write.
+                 body = as.character(a$body %||% ""), ts = matrix_ts(ms),
+                 thread = matrix_thread_root(a$relates_to),
+                 markup = "plain", kind = "message",
+                 self = isTRUE(a$is_self),
+                 mentions = unlist(a$mentions, use.names = FALSE),
+                 encrypted = isTRUE(a$encrypted),
+                 attachments = list(chat_attachment(
+                         id = as.character(a$url),
+                         name = if (is.null(name)) NA_character_ else
+                         as.character(name),
+                         mime = a$mime %||% NA_character_,
+                         bytes = if (is.null(a$size)) NA_integer_ else
+                         as.integer(a$size),
+                         url = as.character(a$url),
+                         sha256 = a$sha256 %||% NA_character_,
+                         raw = a)),
+                 raw = matrix_raw_with_content(a, contents))
+}
+
 # Each timeline event's position in the sync, by event id. Walks the same
 # structure matrix_event_times() does, and for the same reason: it is the
 # only place the homeserver's own ordering survives, since the cleartext
@@ -605,68 +670,20 @@ chat_poll.chat_matrix <- function(client, since = NULL, timeout = NULL, ...) {
     # owning crypto here: corteza used to run its own decrypt off $raw and
     # concatenate the results itself.
     for (d in dec) {
-        # Only messages. mx.client hands back every decrypted room event
-        # (a key, a ring notification, a reaction), and those have
-        # no body; a chat_message with an empty body is what a consumer
-        # trips over.
-        if (!is.character(d$body) || length(d$body) != 1L) {
-            next
-        }
         ms <- d$ts %||% event_ts[[as.character(d$event_id)]]
-        messages[[length(messages) + 1L]] <- chat_message(
-            id = as.character(d$event_id),
-            channel = as.character(d$room_id),
-            sender = as.character(d$sender),
-            body = as.character(d$body),
-            ts = if (is.null(ms)) as.POSIXct(NA) else
-            as.POSIXct(ms / 1000, origin = "1970-01-01"),
-            thread = matrix_thread_root(d$relates_to),
-            markup = "plain", kind = matrix_kind(d$msgtype),
-            self = isTRUE(d$is_self),
-            mentions = unlist(d$mentions, use.names = FALSE),
-            encrypted = TRUE,
-            sender_verified = isTRUE(d$sender_verified),
-            attachments = matrix_decrypted_attachments(d, res$client$user_id),
-            raw = d)
+        m <- matrix_decrypted_message(d, ms, res$client$user_id)
+        if (!is.null(m)) {
+            messages[[length(messages) + 1L]] <- m
+        }
     }
-    # Inbound media. A picture is its own m.room.message event on
-    # Matrix, so it becomes its own chat_message carrying one
-    # attachment -- the same shape chat_send() produces outbound, where
-    # each file is sent as a separate event.
-    #
-    # The text extractor filters to text msgtypes, so without this pass
-    # an image is not merely unreadable, it is invisible: nothing in the
-    # room's traffic says a picture was ever sent.
+    # Inbound media. The text extractor filters to text msgtypes, so
+    # without this pass an image is not merely unreadable, it is
+    # invisible: nothing in the room's traffic says a picture was ever
+    # sent.
     for (a in matrix_media_records(client, res$sync, res$client$user_id)) {
         ms <- a$ts %||% event_ts[[as.character(a$event_id)]]
-        name <- a$filename %||% a$body
-        messages[[length(messages) + 1L]] <- chat_message(
-            id = as.character(a$event_id),
-            channel = as.character(a$room_id),
-            sender = as.character(a$sender),
-            # The body is the filename Matrix ships as the event's
-            # text fallback. Kept, because it is what a client that
-            # cannot render the picture shows, and what a consumer
-            # writing a transcript has to write.
-            body = as.character(a$body %||% ""),
-            ts = if (is.null(ms)) as.POSIXct(NA) else
-            as.POSIXct(ms / 1000, origin = "1970-01-01"),
-            thread = matrix_thread_root(a$relates_to),
-            markup = "plain", kind = "message",
-            self = isTRUE(a$is_self),
-            mentions = unlist(a$mentions, use.names = FALSE),
-            encrypted = isTRUE(a$encrypted),
-            attachments = list(chat_attachment(
-                    id = as.character(a$url),
-                    name = if (is.null(name)) NA_character_ else
-                    as.character(name),
-                    mime = a$mime %||% NA_character_,
-                    bytes = if (is.null(a$size)) NA_integer_ else
-                    as.integer(a$size),
-                    url = as.character(a$url),
-                    sha256 = a$sha256 %||% NA_character_,
-                    raw = a)),
-            raw = matrix_raw_with_content(a, event_content))
+        messages[[length(messages) + 1L]] <- matrix_media_message(a, ms,
+            event_content)
     }
     # Back into the order the homeserver sent them. Appending the
     # decrypted events put every one of them after every cleartext one,
@@ -1145,6 +1162,30 @@ chat_channels.chat_matrix <- function(client, ...) {
     as.character(fn(sess))
 }
 
+# The page's encrypted messages, decrypted, by event id. Empty on a
+# client without E2EE. A page that cannot be decrypted is reported and
+# read for its cleartext: history is context, and an encrypted event this
+# device holds no key for stays unread either way, as it does in a poll.
+matrix_history_decrypt <- function(client, page) {
+    if (!isTRUE(client$e2ee)) {
+        return(list())
+    }
+    dec <- tryCatch({
+        crypto <- matrix_crypto_require(client)
+        client$crypto_ops$decrypt(crypto, page, client$env$mx)
+    }, error = function(e) {
+        message("chat.api: could not decrypt history: ", conditionMessage(e))
+        list()
+    })
+    out <- list()
+    for (d in dec) {
+        if (!is.null(d$event_id)) {
+            out[[as.character(d$event_id)]] <- d
+        }
+    }
+    out
+}
+
 #' @export
 chat_history.chat_matrix <- function(client, channel, limit = 50L,
                                      cursor = NULL, ...) {
@@ -1164,18 +1205,49 @@ chat_history.chat_matrix <- function(client, channel, limit = 50L,
     # contract promises oldest-first, and this is the one place that
     # knows which direction it asked for.
     chunk <- rev(chunk)
+    # The page in the shape a sync has, for the 2 readers chat_poll()
+    # uses, so a picture or an encrypted message reads the same from
+    # either: what a restart's backfill sees is what the poll would
+    # have.
+    self_id <- client$env$mx$user_id
+    page <- stats::setNames(list(list(timeline = list(events = chunk))),
+                            channel)
+    page <- list(rooms = list(join = page))
+    decrypted <- matrix_history_decrypt(client, page)
+    media <- list()
+    for (a in matrix_media_records(client, page, self_id)) {
+        media[[as.character(a$event_id)]] <- a
+    }
+    contents <- matrix_event_contents(page)
     out <- list()
     for (ev in chunk) {
+        id <- as.character(ev$event_id %||% "")
+        if (nzchar(id) && !is.null(decrypted[[id]])) {
+            d <- decrypted[[id]]
+            m <- matrix_decrypted_message(d, d$ts %||% ev$origin_server_ts,
+                                          self_id)
+            if (!is.null(m)) {
+                out[[length(out) + 1L]] <- m
+            }
+            next
+        }
         if (!isTRUE(ev$type == "m.room.message")) {
+            next
+        }
+        if (nzchar(id) && !is.null(media[[id]])) {
+            a <- media[[id]]
+            out[[length(out) + 1L]] <- matrix_media_message(a,
+                a$ts %||% ev$origin_server_ts, contents)
             next
         }
         msgtype <- ev$content$msgtype %||% ""
         kind <- matrix_kind_strict(msgtype)
         if (is.na(kind)) {
-            # A msgtype the contract has no word for -- an image, a
-            # file. Skipping beats inventing a kind: a consumer
-            # replaying history into a transcript would otherwise get an
-            # empty "message" where a picture was.
+            # A msgtype the contract has no word for, with nothing to
+            # fetch: a location, a picture with no address. Skipping
+            # beats inventing a kind: a consumer replaying history into
+            # a transcript would otherwise get an empty "message" where
+            # something else was.
             next
         }
         ms <- ev$origin_server_ts
