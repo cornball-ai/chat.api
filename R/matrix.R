@@ -157,7 +157,8 @@
 #'   (\code{mx.api::mx_upload} and \code{mx_set_avatar_url}). Leave
 #'   NULL in production.
 #' @param .rich Testing seam: replacement for \code{mx.api::mx_send} on
-#'   the rich-send path. Leave NULL in production.
+#'   the rich-send path, and on the path of a send with \code{content}
+#'   outside an encrypted room. Leave NULL in production.
 #' @param .edit Testing seam: replacement for \code{mx.api::mx_send} on
 #'   the edit path. Leave NULL in production.
 #' @return A \code{chat_client} of class \code{chat_matrix}.
@@ -275,6 +276,33 @@ matrix_event_times <- function(sync) {
         }
     }
     out
+}
+
+# Every joined-room timeline event's content, keyed by event id, the
+# same keyed lookup: mx_extract_text_events() keeps 6 fields of a
+# message's content, and keys a sender added of its own
+# (chat_send(content =)) are none of them.
+matrix_event_contents <- function(sync) {
+    out <- list()
+    for (room in sync$rooms$join %||% list()) {
+        for (ev in room$timeline$events %||% list()) {
+            if (!is.null(ev$event_id) && is.list(ev$content)) {
+                out[[as.character(ev$event_id)]] <- ev$content
+            }
+        }
+    }
+    out
+}
+
+# A cleartext record, text or media, as a message's raw, with its event's
+# whole content in raw$content. A decrypted record has content already
+# (mx.client keeps the decrypted payload's), and history's raw is the
+# event itself, so raw$content reads the same for all of them.
+matrix_raw_with_content <- function(record, contents) {
+    if (is.null(record$content)) {
+        record$content <- contents[[as.character(record$event_id)]]
+    }
+    record
 }
 
 # Each timeline event's position in the sync, by event id. Walks the same
@@ -547,6 +575,7 @@ chat_poll.chat_matrix <- function(client, since = NULL, timeout = NULL, ...) {
 
     event_ts <- matrix_event_times(res$sync)
     event_pos <- matrix_event_order(res$sync)
+    event_content <- matrix_event_contents(res$sync)
     recs <- client$extract_fn(res$sync, self_id = res$client$user_id)
     messages <- lapply(recs, function(r) {
         # ts is the event's own origin_server_ts, from the record when
@@ -568,7 +597,7 @@ chat_poll.chat_matrix <- function(client, since = NULL, timeout = NULL, ...) {
                      markup = "plain", kind = matrix_kind(r$msgtype),
                      self = isTRUE(r$is_self),
                      mentions = unlist(r$mentions, use.names = FALSE),
-                     raw = r)
+                     raw = matrix_raw_with_content(r, event_content))
     })
     # Decrypted traffic folds in alongside the cleartext, in the same
     # chat_message shape, so a consumer cannot tell which arrived
@@ -637,7 +666,7 @@ chat_poll.chat_matrix <- function(client, since = NULL, timeout = NULL, ...) {
                     url = as.character(a$url),
                     sha256 = a$sha256 %||% NA_character_,
                     raw = a)),
-            raw = a)
+            raw = matrix_raw_with_content(a, event_content))
     }
     # Back into the order the homeserver sent them. Appending the
     # decrypted events put every one of them after every cleartext one,
@@ -686,8 +715,11 @@ chat_send.chat_matrix <- function(client, channel, text,
                                   thread = NULL, reply_to = NULL,
                                   identity = NULL, files = NULL,
                                   kind = "message", notify = TRUE,
-                                  rich = NULL, ...) {
+                                  rich = NULL, content = NULL, ...) {
     markup <- match.arg(markup)
+    # Checked before anything is uploaded, like the encryption question
+    # below: a refused key must not leave the files posted already.
+    content <- chat_content_keys(content)
     # Resolved before anything is uploaded or posted. The encryption
     # question used to be asked after the attachment loop had already run,
     # which put the files on the homeserver in the clear before the text
@@ -750,10 +782,25 @@ chat_send.chat_matrix <- function(client, channel, text,
             # shape for a caller's fragment. The text still arrives, and
             # chat_capabilities()$rich_markup is empty on an e2ee client
             # so a consumer can know beforehand.
-            event <- client$crypto_ops$send(crypto, client$env$mx, channel,
-                text, msgtype = msgtype,
+            args <- list(crypto, client$env$mx, channel, text,
+                         msgtype = msgtype,
+                         markdown = identical(markup, "markdown"),
+                         mentions = list(...)$mentions)
+            # A caller's keys go in as extra content, which the Megolm
+            # path encrypts with the rest. Named only when there are
+            # some, so a crypto seam without the argument still sends.
+            if (!is.null(content)) {
+                args$extra <- content
+            }
+            event <- do.call(client$crypto_ops$send, args)
+            return(invisible(c(media_ids, as.character(event))))
+        }
+        if (!is.null(content)) {
+            event <- matrix_send_content(client, channel, text, msgtype,
+                content, rich = rich,
                 markdown = identical(markup, "markdown"),
-                mentions = list(...)$mentions)
+                mentions = list(...)$mentions,
+                thread = thread)
             return(invisible(c(media_ids, as.character(event))))
         }
         if (!is.null(rich)) {
@@ -1187,8 +1234,10 @@ chat_mark_read.chat_matrix <- function(client, channel, message_id, ...) {
 #' @export
 chat_edit.chat_matrix <- function(client, channel, message_id, text,
                                   markup = c("plain", "markdown"),
-                                  rich = NULL, kind = "message", ...) {
+                                  rich = NULL, kind = "message",
+                                  content = NULL, ...) {
     markup <- match.arg(markup)
+    content <- chat_content_keys(content)
     msgtype <- matrix_msgtype(kind)
     html <- if (identical(markup, "markdown")) {
         mx.client::mx_markdown_to_html(text)
@@ -1206,6 +1255,12 @@ chat_edit.chat_matrix <- function(client, channel, message_id, text,
         new_content$format <- "org.matrix.custom.html"
         new_content$formatted_body <- html
     }
+    # A caller's keys go in the replacement, which is what a client that
+    # understands edits shows, and in the fallback copy around it, as the
+    # formatted text does: a client showing the edit event itself, its
+    # original out of view, still has them. Encrypted, they ride inside
+    # the ciphertext with the rest.
+    new_content <- c(new_content, content)
     extra <- list(`m.new_content` = new_content,
                   `m.relates_to` = list(rel_type = "m.replace", event_id = message_id))
     if (!is.null(html)) {
@@ -1216,6 +1271,7 @@ chat_edit.chat_matrix <- function(client, channel, message_id, text,
         # it is a correction rather than the bot repeating itself.
         extra$formatted_body <- paste0("* ", html)
     }
+    extra <- c(extra, content)
     # In an encrypted room the whole event -- the "* " fallback body, the
     # m.new_content and the relation -- is encrypted with Megolm, so the
     # replacement text never reaches the homeserver in the clear. The
@@ -1251,17 +1307,52 @@ matrix_send_rich <- function(client, channel, text, rich, msgtype,
     fn <- client$rich_fn %||% mx.api::mx_send
     extra <- list(format = "org.matrix.custom.html", formatted_body = rich)
     if (!is.null(thread)) {
-        # Built here rather than borrowed from mx_send_text(), which
-        # this path exists to bypass: it renders its own HTML and has
-        # nowhere to put a supplied fragment. The relation is the same
-        # one, fallback included, so a rich threaded reply is threaded
-        # in exactly the clients a plain one is.
-        extra[["m.relates_to"]] <- list(
-                                        rel_type = "m.thread", event_id = thread,
-                                        is_falling_back = TRUE,
-                                        "m.in_reply_to" = list(event_id = thread))
+        extra[["m.relates_to"]] <- matrix_thread_relation(thread)
     }
     fn(sess, channel, text, msgtype = msgtype, extra = extra)
+}
+
+# A threaded reply's relation, for the sends that bypass mx_send_text():
+# it renders its own HTML and has nowhere to put a supplied fragment or
+# a caller's keys. The relation is the one it builds, fallback included,
+# so such a reply is threaded in exactly the clients a plain one is.
+matrix_thread_relation <- function(thread) {
+    list(rel_type = "m.thread", event_id = thread, is_falling_back = TRUE,
+         "m.in_reply_to" = list(event_id = thread))
+}
+
+# A send carrying a caller's own content keys (chat_send(content =)) in
+# a room that is not encrypted. mx_send_text() takes no extra content,
+# so this builds the event it would have built -- HTML rendered from
+# markdown with the mentions as pills, m.mentions, the thread relation
+# -- or carries the caller's fragment as matrix_send_rich() does, and
+# adds the keys last. m.mentions goes in with a fragment too, since the
+# notification depends on it; only the pills need HTML of chat.api's
+# own. Through the rich seam: both are an mx_send() with extra content.
+matrix_send_content <- function(client, channel, text, msgtype, content,
+                                rich = NULL, markdown = FALSE,
+                                mentions = NULL, thread = NULL) {
+    html <- rich
+    if (is.null(html) && (isTRUE(markdown) || length(mentions))) {
+        html <- mx.client::mx_markdown_to_html(text)
+        if (length(mentions)) {
+            html <- mx.client::mx_pill_mentions(html, mentions)
+        }
+    }
+    extra <- list()
+    if (!is.null(html)) {
+        extra$format <- "org.matrix.custom.html"
+        extra$formatted_body <- html
+    }
+    if (length(mentions)) {
+        extra[["m.mentions"]] <- list(user_ids = as.list(mentions))
+    }
+    if (!is.null(thread)) {
+        extra[["m.relates_to"]] <- matrix_thread_relation(thread)
+    }
+    sess <- mx.client::mx_client_session(client$env$mx)
+    fn <- client$rich_fn %||% mx.api::mx_send
+    fn(sess, channel, text, msgtype = msgtype, extra = c(extra, content))
 }
 
 # The contract's kind vocabulary as a Matrix msgtype, plus a documented

@@ -315,6 +315,55 @@ local({
                  "not supported by this adapter")
 })
 
+# ---- A caller's content keys on the reference adapter ----
+# Recorded where a Matrix message carries its content, raw$content, so a
+# consumer's test reads them as its code does against a homeserver.
+local({
+    cl <- chat_loopback()
+    tool <- list(v = 1L, kind = "tool", tool_call_id = "t1",
+                 status = "pending")
+    id <- chat_send(cl, "general", "[tool] ls (pending)", kind = "notice",
+                    content = list(ai.cornball.agent = tool))
+    m <- chat_poll(cl)$messages[[1L]]
+    expect_identical(m$raw$content, list(ai.cornball.agent = tool))
+    expect_identical(m$kind, "notice")
+    # An edit's keys replace the original's, as the edited Matrix message
+    # is m.new_content alone; an edit without keys leaves none.
+    tool$status <- "completed"
+    chat_edit(cl, "general", id, "[tool] ls (completed)", kind = "notice",
+              content = list(ai.cornball.agent = tool))
+    h <- chat_history(cl, "general")$messages[[1L]]
+    expect_identical(h$raw$content[["ai.cornball.agent"]]$status, "completed")
+    chat_edit(cl, "general", id, "plain now")
+    h <- chat_history(cl, "general")$messages[[1L]]
+    expect_null(h$raw)
+    expect_true("raw" %in% names(h))
+    # Without keys, a message has no raw, as before; an empty list is
+    # no keys.
+    chat_send(cl, "general", "hello", content = list())
+    expect_null(chat_poll(cl, since = 1L)$messages[[1L]]$raw)
+    # The same refusals as Matrix: the reference adapter is where a
+    # consumer finds out.
+    expect_error(chat_send(cl, "general", "x", content = list(body = "y")),
+                 "content may not set body")
+    expect_error(chat_edit(cl, "general", id, "x",
+                           content = list(format = "html")),
+                 "content may not set format")
+})
+
+# The other adapters take the argument and ignore it, as they ignore
+# rich: text is the message there.
+local({
+    for (fn in list(chat.api:::chat_send.chat_slack,
+                    chat.api:::chat_send.chat_telegram,
+                    chat.api:::chat_send.chat_irc,
+                    chat.api:::chat_edit.chat_slack,
+                    chat.api:::chat_edit.chat_telegram,
+                    chat.api:::chat_edit.default)) {
+        expect_true("content" %in% names(formals(fn)))
+    }
+})
+
 # ---- Channel lifecycle on the reference adapter ----
 # A created channel exists before any traffic: chat_channels() must
 # report it, or a consumer that creates and then lists sees its own
