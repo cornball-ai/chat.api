@@ -1,3 +1,15 @@
+# chat.api 0.2.0.1
+
+* `chat_send()` and `chat_edit()` take `content`, a named list of keys
+  for the message's own content: data a consumer's client reads and
+  other clients ignore. On Matrix the keys go beside the body, in
+  cleartext and encrypted rooms alike, and an edit carries them in its
+  new content. A key chat.api writes itself is refused before anything
+  is sent. Slack, Telegram and IRC take the argument and ignore it.
+* A received Matrix message's `raw` carries the event's whole content in
+  `raw$content`, for text and pictures, in cleartext and encrypted
+  rooms. A cleartext message's `raw` had no `content` before.
+
 # chat.api 0.2.0
 
 * Send encrypted Matrix attachments using the adapter's existing crypto
