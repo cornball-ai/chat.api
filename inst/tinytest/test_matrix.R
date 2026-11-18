@@ -2507,7 +2507,8 @@ local({
 })
 
 # An edit's keys go in m.new_content, which is the edited message, and
-# the fallback copy around it does not repeat them. Cleartext ...
+# in the fallback copy around it, as the formatted text does: a client
+# showing the edit event itself still has them. Cleartext ...
 if (requireNamespace("mx.client", quietly = TRUE))
 local({
     seen <- NULL
@@ -2521,11 +2522,13 @@ local({
     expect_identical(seen$extra[["m.new_content"]][["ai.cornball.agent"]], done)
     expect_identical(seen$extra[["m.new_content"]]$body, "[tool] ls (completed)")
     expect_identical(seen$extra[["m.new_content"]]$msgtype, "m.notice")
-    expect_null(seen$extra[["ai.cornball.agent"]])
+    expect_identical(seen$extra[["ai.cornball.agent"]], done)
     expect_identical(seen$body, "* [tool] ls (completed)")
-    # Without keys the replacement has none, as before.
+    # Without keys the replacement has none, and the fallback none, as
+    # before.
     chat_edit(cl, "!a:ex", "$o", "x", kind = "notice")
     expect_identical(names(seen$extra[["m.new_content"]]), c("msgtype", "body"))
+    expect_identical(names(seen$extra), c("m.new_content", "m.relates_to"))
 })
 # ... and encrypted, inside the ciphertext.
 local({
@@ -2545,7 +2548,7 @@ local({
               kind = "notice", content = list(ai.cornball.agent = done))
     expect_identical(seen$text, "* [tool] ls (completed)")
     expect_identical(seen$extra[["m.new_content"]][["ai.cornball.agent"]], done)
-    expect_null(seen$extra[["ai.cornball.agent"]])
+    expect_identical(seen$extra[["ai.cornball.agent"]], done)
     expect_identical(seen$extra[["m.relates_to"]],
                      list(rel_type = "m.replace", event_id = "$orig"))
 })

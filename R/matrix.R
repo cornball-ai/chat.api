@@ -1255,9 +1255,11 @@ chat_edit.chat_matrix <- function(client, channel, message_id, text,
         new_content$format <- "org.matrix.custom.html"
         new_content$formatted_body <- html
     }
-    # A caller's keys belong to the replacement, which is what a client
-    # that understands edits shows; the fallback copy around it does not
-    # repeat them. Encrypted, they ride inside the ciphertext with it.
+    # A caller's keys go in the replacement, which is what a client that
+    # understands edits shows, and in the fallback copy around it, as the
+    # formatted text does: a client showing the edit event itself, its
+    # original out of view, still has them. Encrypted, they ride inside
+    # the ciphertext with the rest.
     new_content <- c(new_content, content)
     extra <- list(`m.new_content` = new_content,
                   `m.relates_to` = list(rel_type = "m.replace", event_id = message_id))
@@ -1269,6 +1271,7 @@ chat_edit.chat_matrix <- function(client, channel, message_id, text,
         # it is a correction rather than the bot repeating itself.
         extra$formatted_body <- paste0("* ", html)
     }
+    extra <- c(extra, content)
     # In an encrypted room the whole event -- the "* " fallback body, the
     # m.new_content and the relation -- is encrypted with Megolm, so the
     # replacement text never reaches the homeserver in the clear. The

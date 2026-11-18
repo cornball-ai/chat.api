@@ -1237,7 +1237,8 @@ chat_relogin.default <- function(client, ...) {
 #'   turns it into an ordinary message.
 #' @param content Keys of the caller's own for the replacement, as
 #'   \code{\link{chat_send}}. Matrix puts them in \code{m.new_content},
-#'   beside the replacement text. Like the text, they replace the
+#'   beside the replacement text, and in the fallback copy around it, as
+#'   it does the formatted text. Like the text, they replace the
 #'   original's: a key the edit does not repeat is gone from the edited
 #'   message.
 #' @param ... Adapter-specific options.
