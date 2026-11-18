@@ -98,7 +98,7 @@ chat_send.chat_irc <- function(client, channel, text,
                                thread = NULL, reply_to = NULL,
                                identity = NULL, files = NULL,
                                kind = "message", notify = TRUE, rich = NULL,
-                               ...) {
+                               content = NULL, ...) {
     markup <- match.arg(markup)
     verb <- if (identical(kind, "notice")) {
         "NOTICE"

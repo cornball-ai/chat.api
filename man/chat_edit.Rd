@@ -11,6 +11,7 @@ chat_edit(
   markup = c("plain", "markdown"),
   rich = NULL,
   kind = "message",
+  content = NULL,
   ...
 )
 }
@@ -40,6 +41,12 @@ the same reason it is on a send.}
 the message was sent as: Matrix carries the msgtype inside the
 replacement content, so editing an \code{m.notice} without saying so
 turns it into an ordinary message.}
+
+\item{content}{Keys of the caller's own for the replacement, as
+\code{\link{chat_send}}. Matrix puts them in \code{m.new_content},
+beside the replacement text. Like the text, they replace the
+original's: a key the edit does not repeat is gone from the edited
+message.}
 
 \item{...}{Adapter-specific options.}
 }

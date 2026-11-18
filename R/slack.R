@@ -205,7 +205,8 @@ chat_send.chat_slack <- function(client, channel, text,
                                  thread = NULL, reply_to = NULL,
                                  identity = NULL, files = NULL,
                                  kind = "message", notify = TRUE,
-                                 rich = NULL, as_user = FALSE, ...) {
+                                 rich = NULL, content = NULL,
+                                 as_user = FALSE, ...) {
     markup <- match.arg(markup)
     if (isTRUE(as_user) && !nzchar(client$user_token %||% "")) {
         stop("chat_send(as_user = TRUE) needs a user token ",
@@ -645,7 +646,8 @@ chat_set_identity.chat_slack <- function(client, display = NULL,
 #' @export
 chat_edit.chat_slack <- function(client, channel, message_id, text,
                                  markup = c("plain", "markdown"),
-                                 rich = NULL, kind = "message", ...) {
+                                 rich = NULL, kind = "message",
+                                 content = NULL, ...) {
     markup <- match.arg(markup)
     api <- client$api_fn %||% slackr::call_slack_api
     resp <- api("/api/chat.update", .method = "POST", token = client$token,

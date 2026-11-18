@@ -500,7 +500,7 @@ chat_send.chat_telegram <- function(client, channel, text,
                                     thread = NULL, reply_to = NULL,
                                     identity = NULL, files = NULL,
                                     kind = "message", notify = TRUE,
-                                    rich = NULL, ...) {
+                                    rich = NULL, content = NULL, ...) {
     markup <- match.arg(markup)
     # identity is ignored: a bot posts as itself and Telegram has no
     # per-message override, which identity_override = FALSE says. kind
@@ -538,7 +538,8 @@ chat_send.chat_telegram <- function(client, channel, text,
 #' @export
 chat_edit.chat_telegram <- function(client, channel, message_id, text,
                                     markup = c("plain", "markdown"),
-                                    rich = NULL, kind = "message", ...) {
+                                    rich = NULL, kind = "message",
+                                    content = NULL, ...) {
     markup <- match.arg(markup)
     r <- telegram_render(text, markup, rich)
     telegram_call(client, "editMessageText",

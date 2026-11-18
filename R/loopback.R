@@ -84,8 +84,9 @@ chat_send.chat_loopback <- function(client, channel, text,
                                     thread = NULL, reply_to = NULL,
                                     identity = NULL, files = NULL,
                                     kind = "message", notify = TRUE,
-                                    rich = NULL, ...) {
+                                    rich = NULL, content = NULL, ...) {
     markup <- match.arg(markup)
+    content <- chat_content_keys(content)
     attachments <- NULL
     if (!is.null(files)) {
         # A missing file errors rather than sending a message that
@@ -111,9 +112,20 @@ chat_send.chat_loopback <- function(client, channel, text,
         else identity$name,
                         body = text, ts = Sys.time(), thread = thread,
                         markup = markup, kind = kind,
-                        attachments = attachments)
+                        attachments = attachments,
+                        raw = loopback_raw(content))
     client$env$log[[length(client$env$log) + 1L]] <- msg
     invisible(id)
+}
+
+# A caller's content keys where a Matrix message carries its content,
+# raw$content, so a consumer reads them the same way against the
+# reference adapter and a homeserver. NULL when there are none.
+loopback_raw <- function(content) {
+    if (is.null(content)) {
+        return(NULL)
+    }
+    list(content = content)
 }
 
 #' @export
@@ -224,8 +236,10 @@ chat_history.chat_loopback <- function(client, channel, limit = 50L,
 #' @export
 chat_edit.chat_loopback <- function(client, channel, message_id, text,
                                     markup = c("plain", "markdown"),
-                                    rich = NULL, kind = "message", ...) {
+                                    rich = NULL, kind = "message",
+                                    content = NULL, ...) {
     markup <- match.arg(markup)
+    content <- chat_content_keys(content)
     pos <- which(vapply(client$env$log,
                         function(m) identical(m$id, message_id), logical(1)))
     if (!length(pos)) {
@@ -238,6 +252,9 @@ chat_edit.chat_loopback <- function(client, channel, message_id, text,
     msg <- client$env$log[[pos[[1L]]]]
     msg$body <- text
     msg$markup <- markup
+    # The edit's keys replace the original's, as on Matrix, where the
+    # edited message is m.new_content and nothing else.
+    msg["raw"] <- list(loopback_raw(content))
     client$env$log[[pos[[1L]]]] <- msg
     invisible(message_id)
 }

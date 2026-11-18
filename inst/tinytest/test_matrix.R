@@ -2382,3 +2382,228 @@ expect_identical(chat.api:::matrix_msgtype("emote"), "m.emote")
 expect_identical(chat.api:::matrix_msgtype("message"), "m.text")
 expect_identical(chat.api:::matrix_msgtype("m.image"), "m.image")
 expect_identical(chat.api:::matrix_msgtype(NULL), "m.text")
+
+# ---- A caller's content keys ----
+# A consumer's own data rides in the event's content under a namespaced
+# key, which its client reads while every other client shows the body.
+# Both ways, cleartext and encrypted.
+
+agent <- list(v = 1L, kind = "tool", tool_call_id = "t1", status = "pending")
+done <- list(v = 1L, kind = "tool", tool_call_id = "t1", status = "completed")
+
+# A cleartext send puts the keys beside body and msgtype. mx_send_text()
+# takes no extra content, so the send goes through mx_send(), and still
+# carries what mx_send_text() would have: mentions, thread, markdown.
+if (requireNamespace("mx.client", quietly = TRUE))
+local({
+    seen <- NULL
+    plain <- 0L
+    cl <- seam_client(send = function(...) {
+        plain <<- plain + 1L
+        "$plain"
+    },
+                      .rich = function(session, channel, text, msgtype = "m.text",
+                                       extra = NULL) {
+        seen <<- list(channel = channel, text = text, msgtype = msgtype,
+                      extra = extra)
+        "$c1"
+    })
+    expect_identical(chat_send(cl, "!a:ex", "[tool] ls (pending)",
+                               kind = "notice",
+                               content = list(ai.cornball.agent = agent)),
+                     "$c1")
+    expect_identical(seen$channel, "!a:ex")
+    expect_identical(seen$text, "[tool] ls (pending)")
+    expect_identical(seen$msgtype, "m.notice")
+    expect_identical(seen$extra[["ai.cornball.agent"]], agent)
+    # Plain, with nobody mentioned: no HTML and no m.mentions to add.
+    expect_null(seen$extra$format)
+    expect_null(seen$extra[["m.mentions"]])
+    expect_null(seen$extra[["m.relates_to"]])
+
+    chat_send(cl, "!a:ex", "Turn done, @owner", kind = "notice",
+              content = list(ai.cornball.agent = done),
+              mentions = "@owner:ex", thread = "$root")
+    expect_identical(seen$extra[["m.mentions"]],
+                     list(user_ids = list("@owner:ex")))
+    expect_identical(seen$extra$format, "org.matrix.custom.html")
+    expect_identical(seen$extra[["m.relates_to"]]$rel_type, "m.thread")
+    expect_identical(seen$extra[["m.relates_to"]]$event_id, "$root")
+    expect_identical(seen$extra[["ai.cornball.agent"]], done)
+
+    chat_send(cl, "!a:ex", "**ok**", markup = "markdown",
+              content = list(ai.cornball.agent = agent))
+    expect_true(grepl("<strong>ok</strong>", seen$extra$formatted_body,
+                      fixed = TRUE))
+    # A caller's own fragment is sent as given, and its mentions still
+    # notify.
+    chat_send(cl, "!a:ex", "ok", rich = "<em>ok</em>",
+              content = list(ai.cornball.agent = agent),
+              mentions = "@owner:ex")
+    expect_identical(seen$extra$formatted_body, "<em>ok</em>")
+    expect_identical(seen$extra[["m.mentions"]],
+                     list(user_ids = list("@owner:ex")))
+
+    # Without keys, nothing changes: the ordinary path, and an empty
+    # list is no keys.
+    expect_identical(plain, 0L)
+    chat_send(cl, "!a:ex", "hello")
+    chat_send(cl, "!a:ex", "hello", content = list())
+    expect_identical(plain, 2L)
+})
+
+# A key chat.api writes itself is refused, before anything is sent: a
+# second way to set it would leave the two disagreeing on the wire.
+local({
+    cl <- seam_client(send = function(...) stop("sent"),
+                      .rich = function(...) stop("sent"),
+                      media = function(...) stop("uploaded"))
+    expect_error(chat_send(cl, "!a:ex", "x", content = list(body = "y")),
+                 "content may not set body")
+    expect_error(chat_send(cl, "!a:ex", "x",
+                           content = list(`m.relates_to` = list())),
+                 "m.relates_to")
+    expect_error(chat_send(cl, "!a:ex", "x",
+                           files = tempfile(), content = list(msgtype = "m.text")),
+                 "msgtype")
+    expect_error(chat_send(cl, "!a:ex", "x", content = list(1)),
+                 "distinct names")
+    expect_error(chat_send(cl, "!a:ex", "x", content = "ai.cornball.agent"),
+                 "distinct names")
+    expect_error(chat_send(cl, "!a:ex", "x",
+                           content = list(a = 1, a = 2)),
+                 "distinct names")
+    expect_error(chat_edit(cl, "!a:ex", "$o", "x",
+                           content = list(`m.new_content` = list())),
+                 "m.new_content")
+})
+
+# Encrypted, the keys go in as extra content, which the Megolm path
+# encrypts with the rest. No cleartext transport is touched. Without
+# keys no extra is named, so a crypto seam without the argument sends.
+local({
+    ctx <- new.env(parent = emptyenv())
+    seen <- list()
+    ops <- list(init = function(...) ctx,
+                encrypted = function(crypto, mx, room_id) TRUE,
+                send = function(crypto, mx, room_id, text, ...) {
+        seen[[length(seen) + 1L]] <<- c(list(text = text), list(...))
+        "$enc"
+    },
+                decrypt = function(...) list())
+    cl <- seam_client(mx = fake_mx(user_id = "@e2ee-content:ex"),
+                      .crypto = ops, e2ee = TRUE,
+                      send = function(...) stop("cleartext send"),
+                      .rich = function(...) stop("cleartext send"))
+    expect_identical(chat_send(cl, "!secret:ex", "[tool] ls (pending)",
+                               kind = "notice",
+                               content = list(ai.cornball.agent = agent)),
+                     "$enc")
+    expect_identical(seen[[1L]]$text, "[tool] ls (pending)")
+    expect_identical(seen[[1L]]$msgtype, "m.notice")
+    expect_identical(seen[[1L]]$extra, list(ai.cornball.agent = agent))
+    chat_send(cl, "!secret:ex", "plain")
+    expect_false("extra" %in% names(seen[[2L]]))
+})
+
+# An edit's keys go in m.new_content, which is the edited message, and
+# the fallback copy around it does not repeat them. Cleartext ...
+if (requireNamespace("mx.client", quietly = TRUE))
+local({
+    seen <- NULL
+    cl <- seam_client(.edit = function(session, room_id, body, msgtype = "m.text",
+                                       extra = NULL) {
+        seen <<- list(body = body, msgtype = msgtype, extra = extra)
+        "$e"
+    })
+    chat_edit(cl, "!a:ex", "$o", "[tool] ls (completed)", kind = "notice",
+              content = list(ai.cornball.agent = done))
+    expect_identical(seen$extra[["m.new_content"]][["ai.cornball.agent"]], done)
+    expect_identical(seen$extra[["m.new_content"]]$body, "[tool] ls (completed)")
+    expect_identical(seen$extra[["m.new_content"]]$msgtype, "m.notice")
+    expect_null(seen$extra[["ai.cornball.agent"]])
+    expect_identical(seen$body, "* [tool] ls (completed)")
+    # Without keys the replacement has none, as before.
+    chat_edit(cl, "!a:ex", "$o", "x", kind = "notice")
+    expect_identical(names(seen$extra[["m.new_content"]]), c("msgtype", "body"))
+})
+# ... and encrypted, inside the ciphertext.
+local({
+    ctx <- new.env(parent = emptyenv())
+    seen <- NULL
+    ops <- list(init = function(...) ctx,
+                encrypted = function(crypto, mx, room_id) TRUE,
+                send = function(crypto, mx, room_id, text, ...) {
+        seen <<- c(list(text = text), list(...))
+        "$enc"
+    },
+                decrypt = function(...) list())
+    cl <- seam_client(mx = fake_mx(user_id = "@e2ee-content-edit:ex"),
+                      .crypto = ops, e2ee = TRUE,
+                      .edit = function(...) stop("must not be reached"))
+    chat_edit(cl, "!secret:ex", "$orig", "[tool] ls (completed)",
+              kind = "notice", content = list(ai.cornball.agent = done))
+    expect_identical(seen$text, "* [tool] ls (completed)")
+    expect_identical(seen$extra[["m.new_content"]][["ai.cornball.agent"]], done)
+    expect_null(seen$extra[["ai.cornball.agent"]])
+    expect_identical(seen$extra[["m.relates_to"]],
+                     list(rel_type = "m.replace", event_id = "$orig"))
+})
+
+# The relation of an encrypted edit has to be readable outside the
+# ciphertext, or the server cannot aggregate the edit and a client that
+# reads relations off the envelope shows a new message. chat.api hands
+# it to mx.client inside the content, and mx.client's envelope copies
+# it out; pinned here, since chat.api's encrypted edits rely on that.
+if (requireNamespace("mx.client", quietly = TRUE) &&
+    requireNamespace("mx.crypto", quietly = TRUE) &&
+    utils::packageVersion("mx.client") >= "0.3.0")
+local({
+    account <- mx.crypto::mxc_account_new()
+    curve <- mx.crypto::mxc_account_identity_keys(account)$curve25519
+    rel <- list(rel_type = "m.replace", event_id = "$orig")
+    env <- mx.client::mx_crypto_encrypt_event(
+        mx.crypto::mxc_megolm_outbound_new(),
+        list(msgtype = "m.notice", body = "* x", `m.relates_to` = rel,
+             `m.new_content` = list(msgtype = "m.notice", body = "x",
+                                    ai.cornball.agent = done)),
+        "!secret:ex", curve, "DEV1")
+    expect_identical(env[["m.relates_to"]], rel)
+    # The replacement and its keys are in the ciphertext only.
+    expect_null(env[["m.new_content"]])
+})
+
+# Received, a cleartext message carries its event's whole content in
+# raw$content: the extractor's record keeps 6 fields of it, and a
+# sender's own keys are none of them.
+local({
+    answer <- list(v = 1L, kind = "approval_response", approval_id = "a1",
+                   option_id = "allow")
+    cl <- seam_client(recs = list(rec("$1", body = "/approve a1")),
+                      sync = wrap_sync(list(ev("$1", body = "/approve a1",
+                          content = list(ai.cornball.agent = answer)))))
+    m <- chat_poll(cl)$messages[[1L]]
+    expect_identical(m$raw$content[["ai.cornball.agent"]], answer)
+    expect_identical(m$raw$content$body, "/approve a1")
+    # The record's own fields stay.
+    expect_identical(m$raw$event_id, "$1")
+    expect_identical(m$raw$msgtype, "m.text")
+    # An event the sync does not carry gets no content, not an error.
+    cl <- seam_client(recs = list(rec("$2")), sync = wrap_sync(list()))
+    expect_null(chat_poll(cl)$messages[[1L]]$raw$content)
+})
+# A decrypted message has the decrypted payload's content, which
+# mx.client keeps, so raw$content reads the same way.
+local({
+    answer <- list(v = 1L, kind = "approval_response", approval_id = "a1",
+                   option_id = "allow")
+    d <- dec_rec("$e1", body = "/approve a1")
+    d$content <- list(msgtype = "m.text", body = "/approve a1",
+                      ai.cornball.agent = answer)
+    f <- fake_crypto(decrypted = list(d))
+    cl <- seam_client(mx = fake_mx(user_id = "@e2ee-recv:ex"), e2ee = TRUE,
+                      .crypto = f$ops)
+    m <- chat_poll(cl)$messages[[1L]]
+    expect_true(m$encrypted)
+    expect_identical(m$raw$content[["ai.cornball.agent"]], answer)
+})
