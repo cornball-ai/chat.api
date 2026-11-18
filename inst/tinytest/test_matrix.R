@@ -2009,11 +2009,13 @@ local({
 
 if (requireNamespace("mx.client", quietly = TRUE))
 local({
-    # A msgtype the contract has no word for is dropped, not renamed.
-    # matrix_kind() answers "message" for anything, so an m.image would
-    # otherwise arrive as a text message whose body is a filename.
+    # A msgtype the contract has no word for, with nothing to fetch, is
+    # dropped, not renamed. matrix_kind() answers "message" for
+    # anything, so a picture with no address would otherwise arrive as a
+    # text message whose body is a filename.
     cl <- seam_client(.history = function(...) {
-        list(chunk = list(hev("$2", "cat.png", msgtype = "m.image"),
+        list(chunk = list(hev("$3", "here", msgtype = "m.location"),
+                          hev("$2", "cat.png", msgtype = "m.image"),
                           hev("$1", "look")))
     })
     h <- chat_history(cl, "!a:ex")$messages
@@ -2045,6 +2047,111 @@ local({
     h <- chat_history(cl, "!a:ex")$messages
     expect_true(h[[1L]]$self)
     expect_identical(h[[1L]]$mentions, "@ann:ex")
+})
+
+# A picture is history too: it arrives where it was sent, as the same
+# message the poll would have delivered, attachment included. A restart's
+# backfill reads history, so a picture sent while a bot was down is
+# otherwise never seen.
+img_ev <- function(id, ts = 1700000001000) {
+    list(type = "m.room.message", event_id = id, sender = "@ann:ex",
+         origin_server_ts = ts,
+         content = list(msgtype = "m.image", body = "cat.png",
+                        url = "mxc://ex/cat",
+                        info = list(mimetype = "image/png", size = 2048L)))
+}
+if (chat.api:::matrix_media_available())
+local({
+    cl <- seam_client(.history = function(...) {
+        list(chunk = list(hev("$2", "nice", ts = 1700000002000),
+                          img_ev("$img"),
+                          hev("$1", "look", ts = 1700000000000)))
+    })
+    h <- chat_history(cl, "!a:ex")$messages
+    expect_identical(vapply(h, function(m) m$id, ""), c("$1", "$img", "$2"))
+    pic <- h[[2L]]
+    expect_identical(pic$body, "cat.png")
+    expect_identical(pic$kind, "message")
+    expect_identical(pic$attachments[[1L]]$url, "mxc://ex/cat")
+    expect_identical(pic$attachments[[1L]]$mime, "image/png")
+    expect_identical(pic$attachments[[1L]]$bytes, 2048L)
+    expect_identical(pic$raw$content$url, "mxc://ex/cat")
+    expect_null(h[[1L]]$attachments)
+    # The poll's message for the same event, field for field.
+    polled <- seam_client(sync = wrap_sync(list(img_ev("$img")), room = "!a:ex"))
+    expect_identical(chat_poll(polled)$messages[[1L]], pic)
+})
+
+# An encrypted room's history is decrypted with the keys this device
+# holds, through the same step the poll takes, and the messages keep
+# their places among the cleartext ones.
+enc_ev <- function(id, ts = 1700000000500) {
+    list(type = "m.room.encrypted", event_id = id, sender = "@alice:ex",
+         origin_server_ts = ts,
+         content = list(algorithm = "m.megolm.v1.aes-sha2",
+                        ciphertext = "opaque", session_id = "s1"))
+}
+history_chunk <- function(...) {
+    list(chunk = list(hev("$c2", "after", ts = 1700000002000), enc_ev("$e1"),
+                      hev("$c1", "before", ts = 1700000000000)))
+}
+local({
+    f <- fake_crypto(decrypted = list(dec_rec("$e1", room_id = "!a:ex")))
+    ops <- f$ops
+    seen <- NULL
+    inner <- ops$decrypt
+    ops$decrypt <- function(crypto, sync, mx) {
+        seen <<- sync
+        inner(crypto, sync, mx)
+    }
+    cl <- seam_client(mx = fake_mx(user_id = "@e2ee-recv:ex"), e2ee = TRUE,
+                      .crypto = ops, .history = history_chunk,
+                      .extract_media = function(...) list())
+    h <- chat_history(cl, "!a:ex")$messages
+    expect_identical(vapply(h, function(m) m$id, ""), c("$c1", "$e1", "$c2"))
+    expect_true(h[[2L]]$encrypted)
+    expect_identical(h[[2L]]$body, "psst")
+    expect_true(h[[2L]]$sender_verified)
+    # The record had no time of its own; the event's is used.
+    expect_identical(as.numeric(h[[2L]]$ts), 1700000000.5)
+    expect_false(isTRUE(h[[1L]]$encrypted))
+    # The page went to the decrypt step as the sync it expects, under
+    # the room it came from.
+    expect_identical(names(seen$rooms$join), "!a:ex")
+    expect_identical(length(seen$rooms$join[["!a:ex"]]$timeline$events), 3L)
+    expect_identical(f$log$decrypted, 1L)
+})
+
+# A page that cannot be decrypted is reported, and its cleartext still
+# arrives.
+local({
+    f <- fake_crypto(decrypt_error = TRUE)
+    cl <- seam_client(mx = fake_mx(user_id = "@e2ee-recv:ex"), e2ee = TRUE,
+                      .crypto = f$ops, .history = history_chunk,
+                      .extract_media = function(...) list())
+    expect_message(h <- chat_history(cl, "!a:ex")$messages,
+                   "could not decrypt history")
+    expect_identical(vapply(h, function(m) m$id, ""), c("$c1", "$c2"))
+})
+
+# A decrypted event that is not a message (a key, a reaction) has no
+# body and is no message here either. A client without E2EE asks
+# nothing of the crypto layer and reads the cleartext alone.
+local({
+    f <- fake_crypto(decrypted = list(list(event_id = "$e1", room_id = "!a:ex",
+                                           type = "m.reaction",
+                                           content = list())))
+    cl <- seam_client(mx = fake_mx(user_id = "@e2ee-recv:ex"), e2ee = TRUE,
+                      .crypto = f$ops, .history = history_chunk,
+                      .extract_media = function(...) list())
+    h <- chat_history(cl, "!a:ex")$messages
+    expect_identical(vapply(h, function(m) m$id, ""), c("$c1", "$c2"))
+    plain <- fake_crypto(decrypted = list(dec_rec("$e1", room_id = "!a:ex")))
+    cl <- seam_client(.crypto = plain$ops, .history = history_chunk,
+                      .extract_media = function(...) list())
+    h <- chat_history(cl, "!a:ex")$messages
+    expect_identical(vapply(h, function(m) m$id, ""), c("$c1", "$c2"))
+    expect_identical(plain$log$decrypted, 0L)
 })
 
 # ---- State: pending ----
