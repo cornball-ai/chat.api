@@ -2594,6 +2594,20 @@ local({
     # An event the sync does not carry gets no content, not an error.
     cl <- seam_client(recs = list(rec("$2")), sync = wrap_sync(list()))
     expect_null(chat_poll(cl)$messages[[1L]]$raw$content)
+    # A picture is a message too: its raw has the event's content, and
+    # the media record's own fields stay.
+    cl <- seam_client(sync = wrap_sync(list(ev("$img", body = "cat.png",
+                          msgtype = "m.image",
+                          content = list(url = "mxc://ex/abc",
+                                         ai.cornball.agent = answer)))),
+                      .extract_media = function(sync, self_id) {
+                          list(media_rec("$img", body = "cat.png"))
+                      })
+    m <- chat_poll(cl)$messages[[1L]]
+    expect_identical(m$raw$content[["ai.cornball.agent"]], answer)
+    expect_identical(m$raw$content$msgtype, "m.image")
+    expect_identical(m$raw$url, "mxc://ex/abc")
+    expect_null(m$attachments[[1L]]$raw$content)
 })
 # A decrypted message has the decrypted payload's content, which
 # mx.client keeps, so raw$content reads the same way.

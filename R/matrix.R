@@ -294,10 +294,10 @@ matrix_event_contents <- function(sync) {
     out
 }
 
-# A cleartext record as a message's raw, with its event's whole content
-# in raw$content. A decrypted record has content already (mx.client
-# keeps the decrypted payload's), and history's raw is the event itself,
-# so raw$content reads the same for all three.
+# A cleartext record, text or media, as a message's raw, with its event's
+# whole content in raw$content. A decrypted record has content already
+# (mx.client keeps the decrypted payload's), and history's raw is the
+# event itself, so raw$content reads the same for all of them.
 matrix_raw_with_content <- function(record, contents) {
     if (is.null(record$content)) {
         record$content <- contents[[as.character(record$event_id)]]
@@ -666,7 +666,7 @@ chat_poll.chat_matrix <- function(client, since = NULL, timeout = NULL, ...) {
                     url = as.character(a$url),
                     sha256 = a$sha256 %||% NA_character_,
                     raw = a)),
-            raw = a)
+            raw = matrix_raw_with_content(a, event_content))
     }
     # Back into the order the homeserver sent them. Appending the
     # decrypted events put every one of them after every cleartext one,
