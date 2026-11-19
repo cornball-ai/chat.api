@@ -220,7 +220,8 @@ Leave NULL in production.}
 the edit path. Leave NULL in production.}
 
 \item{.rich}{Testing seam: replacement for \code{mx.api::mx_send} on
-the rich-send path. Leave NULL in production.}
+the rich-send path, and on the path of a send with \code{content}
+outside an encrypted room. Leave NULL in production.}
 
 \item{.avatar}{Testing seam: replacement for the upload-then-set
 pair behind \code{chat_set_identity(avatar =)}

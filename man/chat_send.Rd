@@ -15,6 +15,7 @@ chat_send(
   kind = "message",
   notify = TRUE,
   rich = NULL,
+  content = NULL,
   ...
 )
 }
@@ -61,6 +62,23 @@ Ignored rather than refused where unsupported, on
 \code{\link{chat_typing}}'s reasoning: the text is the message and
 the markup is decoration, so losing it costs presentation and
 nothing else.}
+
+\item{content}{Keys of the caller's own for the message's content, as
+a named list, or NULL. Matrix adds them to the \code{m.room.message}
+content beside \code{body} and \code{msgtype}, inside the ciphertext
+in an encrypted room, so a consumer can carry data its own client
+reads and every other client ignores, under a namespaced key such
+as \code{"ai.cornball.agent"}. A received message carries its
+content in \code{raw$content}, and the loopback adapter records
+these keys there too; the other adapters ignore them, as they
+ignore \code{rich}, so \code{text} has to stand on its own.
+
+A key chat.api writes itself is refused: \code{body},
+\code{msgtype}, \code{format}, \code{formatted_body},
+\code{m.relates_to}, \code{m.mentions} and \code{m.new_content}.
+\code{text}, \code{kind}, \code{rich}, \code{thread} and the
+\code{mentions} option set those. With \code{files}, the keys go on
+the text's event, not on the attachments'.}
 
 \item{...}{Adapter-specific options.}
 }

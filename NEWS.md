@@ -1,10 +1,24 @@
+# chat.api 0.2.0.2
+
+* `chat_history()` on Matrix returns pictures and encrypted messages, as
+  `chat_poll()` does. It dropped every picture and every encrypted
+  event, so a bot that read history after a restart missed the pictures
+  sent while it was down and saw nothing of an encrypted room. History
+  decrypts its page with the poll's own step, which may request a
+  missing key from the account's other devices; a page that cannot be
+  decrypted is reported and read for its cleartext.
+
 # chat.api 0.2.0.1
 
-* A Matrix client built without `e2ee` now says when an encrypted room's
-  events reach it: `chat_poll()` emits a message naming the room the first
-  time it sees `m.room.encrypted` there, once per room for the life of the
-  client, instead of dropping the events in silence. Turning `e2ee` on is
-  the fix; the message is what makes the need visible in a bot's log.
+* `chat_send()` and `chat_edit()` take `content`, a named list of keys
+  for the message's own content: data a consumer's client reads and
+  other clients ignore. On Matrix the keys go beside the body, in
+  cleartext and encrypted rooms alike, and an edit carries them in its
+  new content. A key chat.api writes itself is refused before anything
+  is sent. Slack, Telegram and IRC take the argument and ignore it.
+* A received Matrix message's `raw` carries the event's whole content in
+  `raw$content`, for text and pictures, in cleartext and encrypted
+  rooms. A cleartext message's `raw` had no `content` before.
 
 # chat.api 0.2.0
 

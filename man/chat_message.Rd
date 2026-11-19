@@ -59,7 +59,12 @@ substring matching misses rich mentions that carry no plain text.}
 exactly as the transport layer handed it over. Shape is
 adapter-specific and may already be normalized by the transport
 package (Matrix hands over an extracted record, not the timeline
-event), so it is an escape hatch, not a guarantee of completeness.}
+event), so it is an escape hatch, not a guarantee of completeness.
+One part is promised: a Matrix message, cleartext or decrypted,
+carries its event's whole content in \code{raw$content}, with any
+keys a sender added of its own (\code{\link{chat_send}}'s
+\code{content}), and the loopback adapter records those keys
+there.}
 
 \item{encrypted}{Logical: did this message arrive end-to-end
 encrypted? FALSE on transports without E2EE and on cleartext

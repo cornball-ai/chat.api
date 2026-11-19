@@ -61,6 +61,22 @@ chat_poll <- function(client, since = NULL, timeout = NULL, ...) {
 #'   nothing else.
 #' @param notify Logical; FALSE requests a silent delivery where
 #'   supported.
+#' @param content Keys of the caller's own for the message's content, as
+#'   a named list, or NULL. Matrix adds them to the \code{m.room.message}
+#'   content beside \code{body} and \code{msgtype}, inside the ciphertext
+#'   in an encrypted room, so a consumer can carry data its own client
+#'   reads and every other client ignores, under a namespaced key such
+#'   as \code{"ai.cornball.agent"}. A received message carries its
+#'   content in \code{raw$content}, and the loopback adapter records
+#'   these keys there too; the other adapters ignore them, as they
+#'   ignore \code{rich}, so \code{text} has to stand on its own.
+#'
+#'   A key chat.api writes itself is refused: \code{body},
+#'   \code{msgtype}, \code{format}, \code{formatted_body},
+#'   \code{m.relates_to}, \code{m.mentions} and \code{m.new_content}.
+#'   \code{text}, \code{kind}, \code{rich}, \code{thread} and the
+#'   \code{mentions} option set those. With \code{files}, the keys go on
+#'   the text's event, not on the attachments'.
 #' @param ... Adapter-specific options.
 #' @return Character vector of the message ids this call created, in the
 #'   order they were sent, invisibly. Usually length one. A platform that
@@ -78,8 +94,36 @@ chat_poll <- function(client, since = NULL, timeout = NULL, ...) {
 chat_send <- function(client, channel, text, markup = c("plain", "markdown"),
                       thread = NULL, reply_to = NULL, identity = NULL,
                       files = NULL, kind = "message", notify = TRUE,
-                      rich = NULL, ...) {
+                      rich = NULL, content = NULL, ...) {
     UseMethod("chat_send")
+}
+
+# The keys chat_send() and chat_edit() write themselves, which a
+# caller's content may not name. Each has an argument of its own, and a
+# second way to set it would leave the two disagreeing on the wire.
+CHAT_CONTENT_RESERVED <- c("body", "msgtype", "format", "formatted_body",
+                           "m.relates_to", "m.mentions", "m.new_content")
+
+# A caller's content keys, checked: NULL for none (an empty list is
+# none too), or a named list whose names are distinct, non-empty and
+# not chat.api's own.
+chat_content_keys <- function(content) {
+    if (is.null(content) || (is.list(content) && !length(content))) {
+        return(NULL)
+    }
+    nms <- names(content)
+    if (!is.list(content) || is.null(nms) || anyNA(nms) ||
+        !all(nzchar(nms)) || anyDuplicated(nms)) {
+        stop("content must be NULL or a list with distinct names.",
+             call. = FALSE)
+    }
+    taken <- intersect(nms, CHAT_CONTENT_RESERVED)
+    if (length(taken)) {
+        stop("content may not set ", paste(taken, collapse = ", "),
+             ", which chat.api writes itself. Use text, kind, rich, thread ",
+             "or mentions instead.", call. = FALSE)
+    }
+    content
 }
 
 #' Signal typing state in a channel
@@ -555,6 +599,11 @@ chat_disconnect.default <- function(client, ...) {
 #'   adapter-specific and may already be normalized by the transport
 #'   package (Matrix hands over an extracted record, not the timeline
 #'   event), so it is an escape hatch, not a guarantee of completeness.
+#'   One part is promised: a Matrix message, cleartext or decrypted,
+#'   carries its event's whole content in \code{raw$content}, with any
+#'   keys a sender added of its own (\code{\link{chat_send}}'s
+#'   \code{content}), and the loopback adapter records those keys
+#'   there.
 #' @param attachments List of \code{\link{chat_attachment}} records,
 #'   or NULL. Inbound media: what a sent \code{files =} looks like
 #'   from the receiving side, on adapters whose
@@ -1186,6 +1235,12 @@ chat_relogin.default <- function(client, ...) {
 #'   the message was sent as: Matrix carries the msgtype inside the
 #'   replacement content, so editing an \code{m.notice} without saying so
 #'   turns it into an ordinary message.
+#' @param content Keys of the caller's own for the replacement, as
+#'   \code{\link{chat_send}}. Matrix puts them in \code{m.new_content},
+#'   beside the replacement text, and in the fallback copy around it, as
+#'   it does the formatted text. Like the text, they replace the
+#'   original's: a key the edit does not repeat is gone from the edited
+#'   message.
 #' @param ... Adapter-specific options.
 #' @return The identifier of the event the edit created where the
 #'   platform makes one (Matrix), or of the edited message where it does
@@ -1205,14 +1260,14 @@ chat_relogin.default <- function(client, ...) {
 #' @export
 chat_edit <- function(client, channel, message_id, text,
                       markup = c("plain", "markdown"), rich = NULL,
-                      kind = "message", ...) {
+                      kind = "message", content = NULL, ...) {
     UseMethod("chat_edit")
 }
 
 #' @export
 chat_edit.default <- function(client, channel, message_id, text,
                               markup = c("plain", "markdown"), rich = NULL,
-                              kind = "message", ...) {
+                              kind = "message", content = NULL, ...) {
     stop("chat_edit() is not supported by this adapter (",
          paste(class(client), collapse = "/"),
          "). Check chat_capabilities()$edits.", call. = FALSE)

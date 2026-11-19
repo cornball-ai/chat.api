@@ -202,10 +202,11 @@ expect_false("a notice" %in% vapply(got$messages, `[[`, "", "body"))
 
 # The record shape the adapter reads. The wire's content$m.relates_to
 # arrives as the record's `relates_to`, so nothing here looks for the
-# wire name.
+# wire name. The event's whole content rides beside the record, as
+# raw$content, which the extractor's fields do not include.
 expect_true(all(c("room_id", "event_id", "sender", "is_self", "body",
                   "msgtype", "mentions") %in% names(m$raw)))
-expect_false("content" %in% names(m$raw))
+expect_identical(m$raw$content$body, m$body)
 expect_null(m$raw[["m.relates_to"]])
 # An unthreaded message has no thread, and NULL is the answer.
 expect_null(m$thread)
