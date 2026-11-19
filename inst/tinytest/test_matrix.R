@@ -1272,6 +1272,59 @@ two <- list(rooms = list(join = list(
 expect_identical(pos(two)[["$a"]], 1L)
 expect_identical(pos(two)[["$b"]], 2L)
 
+# ---- Poll: a cleartext client says once per room that it drops encrypted events ----
+# An encrypted room's events reach a client without e2ee as
+# m.room.encrypted, which the text extractor skips. Nothing in the poll
+# mentioned them, so a bot in such a room looked dead: it had joined, and
+# every message after that vanished without a line in its log. The
+# notice names the room once per client; an e2ee client decrypts instead
+# and never raises it.
+local({
+    enc <- list(type = "m.room.encrypted", event_id = "$enc1",
+                sender = "@alice:ex", origin_server_ts = 1700000000001,
+                content = list(algorithm = "m.megolm.v1.aes-sha2",
+                               session_id = "S", ciphertext = "..."))
+    mixed <- list(rooms = list(join = list(
+        `!enc:ex` = list(timeline = list(events = list(enc))),
+        `!plain:ex` = list(timeline = list(events = list(ev("$p1")))))))
+    later <- list(rooms = list(join = list(
+        `!other:ex` = list(timeline = list(events = list(enc))))))
+    syncs <- list(mixed, mixed, later)
+    n <- 0L
+    cl <- chat_matrix(mx = fake_mx(), .extract_media = function(...) list(),
+        .sync = function(client, ...) {
+            n <<- n + 1L
+            list(sync = syncs[[n]], client = client, first_run = FALSE)
+        },
+        .extract = function(...) list(), .send = function(...) "$id",
+        .media = function(...) NULL)
+    said <- function(expr) {
+        out <- character()
+        withCallingHandlers(expr, message = function(m) {
+            out <<- c(out, conditionMessage(m))
+            invokeRestart("muffleMessage")
+        })
+        out
+    }
+    first <- said(chat_poll(cl, timeout = 0))
+    expect_identical(length(first), 1L)
+    expect_true(grepl("!enc:ex", first, fixed = TRUE))
+    expect_true(grepl("no e2ee", first, fixed = TRUE))
+    expect_false(grepl("!plain:ex", first, fixed = TRUE))
+    # The same room again is not news.
+    expect_identical(length(said(chat_poll(cl, timeout = 0))), 0L)
+    # A room first seen encrypted on a later poll is.
+    third <- said(chat_poll(cl, timeout = 0))
+    expect_identical(length(third), 1L)
+    expect_true(grepl("!other:ex", third, fixed = TRUE))
+    # An e2ee client, and an empty sync, say nothing.
+    notice <- chat.api:::matrix_notice_encrypted
+    expect_identical(said(notice(list(e2ee = TRUE, env = new.env()), mixed)),
+                     character())
+    expect_identical(said(notice(list(e2ee = FALSE, env = new.env()), NULL)),
+                     character())
+})
+
 # ---- The four seams still run without mx.client ----
 # chat_matrix() documents mx plus .sync/.extract/.send/.media as enough
 # to poll and send on a host with no mx.client. That works because `%||%`
